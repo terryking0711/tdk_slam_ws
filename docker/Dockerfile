@@ -27,6 +27,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-tf2-tools \
     ros-humble-laser-filters \
     ros-humble-pcl-ros \
+    ros-humble-teleop-tools \
+    ros-humble-rviz2 \
+    ros-humble-gazebo-ros-pkgs \
+    ros-humble-teleop-twist-keyboard \
+    ros-humble-xacro \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
