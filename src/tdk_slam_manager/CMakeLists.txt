@@ -8,6 +8,16 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(gazebo_ros REQUIRED)
+
+install(DIRECTORY
+  launch
+  config
+  sim
+  urdf
+  cartographer_config
+  DESTINATION share/${PROJECT_NAME}
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
