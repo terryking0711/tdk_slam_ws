@@ -2,7 +2,7 @@ laser_merger:
   ros__parameters:
     destination_frame: "base_footprint"
     scan_destination_topic: "/scan"
-    laserscan_topics: "/scan_front_filtered /scan_rear_filtered"
+    laserscan_topics: "/front/scan /rear/scan"
 
     angle_min: -3.14159
     angle_max: 3.14159
