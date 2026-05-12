@@ -9,6 +9,15 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(gazebo_ros REQUIRED)
+find_package(sensor_msgs REQUIRED)
+
+add_executable(laser_angle_filter_node src/laser_angle_filter.cpp)
+ament_target_dependencies(laser_angle_filter_node rclcpp sensor_msgs)
+
+install(TARGETS
+  laser_angle_filter_node
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 install(DIRECTORY
   launch
