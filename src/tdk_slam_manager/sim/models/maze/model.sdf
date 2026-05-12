@@ -1,0 +1,24 @@
+<!-- models/maze/model.sdf -->
+<sdf version="1.6">
+  <model name="maze">
+    <static>true</static>
+    <link name="maze_link">
+      <visual name="maze_visual">
+        <geometry>
+          <mesh>
+            <uri>model://maze/meshes/ground.dae</uri>
+            <scale>0.001 0.001 0.001</scale>
+          </mesh>
+        </geometry>
+      </visual>
+      <collision name="maze_collision">
+        <geometry>
+          <mesh>
+            <uri>model://maze/meshes/ground.dae</uri>
+            <scale>0.001 0.001 0.001</scale>
+          </mesh>
+        </geometry>
+      </collision>
+    </link>
+  </model>
+</sdf>

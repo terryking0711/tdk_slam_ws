@@ -3,15 +3,41 @@
 
   <xacro:property name="pkg_path" value="$(find tdk_slam_manager)"/>
   <xacro:property name="props" value="${xacro.load_yaml(pkg_path + '/config/robot_params.yaml')}"/>
-  
+
+  <material name="blue"><color rgba="0 0 0.8 1"/></material>
+  <material name="black"><color rgba="0 0 0 1"/></material>
+
+  <xacro:macro name="box_inertia" params="m x y z">
+    <inertial>
+      <mass value="${m}"/>
+      <origin xyz="0 0 -0.05" rpy="0 0 0"/>
+      <inertia ixx="${(1/12)*m*(y*y + z*z)}" ixy="0" ixz="0"
+               iyy="${(1/12)*m*(x*x + z*z)}" iyz="0"
+               izz="${(1/12)*m*(x*x + y*y)}"/>
+    </inertial>
+  </xacro:macro>
+
+  <xacro:macro name="cylinder_inertia" params="m r h">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="${m}"/>
+      <inertia ixx="${(m/12) * (3*r*r + h*h)}" ixy="0.0" ixz="0.0" 
+               iyy="${(m/12) * (3*r*r + h*h)}" iyz="0.0" 
+               izz="${(m/2) * (r*r)}"/>
+    </inertial>
+  </xacro:macro>
+
   <link name="base_footprint"/>
 
   <link name="base_link">
     <visual>
-      <geometry>
-        <box size="0.4 0.4 0.1"/> </geometry>
-      <material name="blue"><color rgba="0 0 0.8 1"/></material>
+      <geometry><box size="0.4 0.4 0.1"/></geometry>
+      <material name="blue"/>
     </visual>
+    <collision>
+      <geometry><box size="0.4 0.4 0.1"/></geometry>
+    </collision>
+    <xacro:box_inertia m="10" x="0.4" y="0.4" z="0.1"/>
   </link>
 
   <joint name="base_joint" type="fixed">
@@ -20,35 +46,121 @@
     <origin xyz="0 0 0.10" rpy="0 0 0"/>
   </joint>
 
-  <link name="laser_front">
-    <visual>
-      <geometry>
-        <cylinder radius="0.035" length="0.04"/> </geometry>
-      <material name="black"><color rgba="0 0 0 1"/></material>
-    </visual>
-  </link>
+  <xacro:macro name="wheel" params="prefix side">
+    <link name="${prefix}_wheel">
+      <visual>
+        <geometry><cylinder radius="0.05" length="0.04"/></geometry>
+        <material name="black"/>
+      </visual>
+      <collision>
+        <geometry><cylinder radius="0.05" length="0.04"/></geometry>
+      </collision>
+      <xacro:cylinder_inertia m="1" r="0.05" h="0.04"/>
+    </link>
 
-  <joint name="laser_front_joint" type="fixed">
-    <parent link="base_link"/>
-    <child link="laser_front"/>
-    <origin xyz="${props['sensors']['front_lidar']['x']} ${props['sensors']['front_lidar']['y']} ${props['sensors']['front_lidar']['z']}" 
-            rpy="0 0 ${props['sensors']['front_lidar']['yaw']}"/>
-  </joint>
+    <joint name="${prefix}_wheel_joint" type="continuous">
+      <parent link="base_link"/>
+      <child link="${prefix}_wheel"/>
+      <origin xyz="0 ${side * 0.22} -0.05" rpy="-1.5708 0 0"/>
+      <axis xyz="0 0 1"/>
+    </joint>
 
-  <link name="laser_rear">
+    <gazebo reference="${prefix}_wheel">
+      <mu1>1</mu1>
+      <mu2>1</mu2>
+      <kp>100000</kp>
+      <kd>1000</kd>
+      <material>Gazebo/Black</material>
+    </gazebo>
+  </xacro:macro>
+
+  <xacro:wheel prefix="left" side="1"/>
+  <xacro:wheel prefix="right" side="-1"/>
+
+  <link name="caster_wheel">
     <visual>
-      <geometry>
-        <cylinder radius="0.035" length="0.04"/>
-      </geometry>
+      <geometry><sphere radius="0.05"/></geometry>
       <material name="black"/>
     </visual>
+    <collision>
+      <geometry><sphere radius="0.05"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
   </link>
 
-  <joint name="laser_rear_joint" type="fixed">
+  <joint name="caster_joint" type="fixed">
     <parent link="base_link"/>
-    <child link="laser_rear"/>
-    <origin xyz="${props['sensors']['rear_lidar']['x']} ${props['sensors']['rear_lidar']['y']} ${props['sensors']['rear_lidar']['z']}" 
-            rpy="0 0 ${props['sensors']['rear_lidar']['yaw']}"/>
+    <child link="caster_wheel"/> <origin xyz="0.15 0 -0.05" rpy="0 0 0"/>
   </joint>
+
+  <gazebo reference="caster_wheel">
+    <mu1>0.0001</mu1>
+    <mu2>0.0001</mu2>
+    <kp>100000</kp>
+    <kd>1000</kd>
+    <material>Gazebo/Black</material>
+  </gazebo>
+
+  <xacro:macro name="laser" params="prefix config_name">
+    <link name="laser_${prefix}">
+      <visual>
+        <geometry><cylinder radius="0.035" length="0.04"/></geometry>
+        <material name="black"/>
+      </visual>
+    </link>
+
+    <joint name="laser_${prefix}_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="laser_${prefix}"/>
+      <origin xyz="${props['sensors'][config_name]['x']} ${props['sensors'][config_name]['y']} ${props['sensors'][config_name]['z']}" 
+              rpy="0 0 ${props['sensors'][config_name]['yaw']}"/>
+    </joint>
+
+    <gazebo reference="laser_${prefix}">
+      <sensor name="${prefix}_rplidar" type="ray">
+        <always_on>true</always_on>
+        <visualize>true</visualize>
+        <update_rate>10</update_rate>
+        <ray>
+          <scan>
+            <horizontal><samples>360</samples><resolution>1</resolution><min_angle>-3.14159</min_angle><max_angle>3.14159</max_angle></horizontal>
+          </scan>
+          <range><min>0.15</min><max>6.0</max><resolution>0.01</resolution></range>
+        </ray>
+        <plugin name="${prefix}_scan_plugin" filename="libgazebo_ros_ray_sensor.so">
+          <ros><remapping>~/out:=/${prefix}/scan</remapping></ros>
+          <output_type>sensor_msgs/LaserScan</output_type>
+          <frame_name>laser_${prefix}</frame_name>
+        </plugin>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+
+  <xacro:laser prefix="front" config_name="front_lidar"/>
+  <xacro:laser prefix="rear" config_name="rear_lidar"/>
+
+  <gazebo>
+    <plugin name="diff_drive" filename="libgazebo_ros_diff_drive.so">
+      <ros>
+        <namespace>/</namespace>
+        <remapping>cmd_vel:=cmd_vel</remapping>
+        <remapping>odom:=odom</remapping>
+      </ros>
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+      <wheel_separation>0.44</wheel_separation>
+      <wheel_diameter>0.1</wheel_diameter>
+      <publish_odom>true</publish_odom>
+      <publish_odom_tf>true</publish_odom_tf>
+      <publish_wheel_tf>true</publish_wheel_tf>
+      <odometry_frame>odom</odometry_frame>
+      <robot_base_frame>base_footprint</robot_base_frame>
+      <max_wheel_acceleration>1.0</max_wheel_acceleration>
+      <max_wheel_torque>20</max_wheel_torque>
+    </plugin>
+  </gazebo>
 
 </robot>

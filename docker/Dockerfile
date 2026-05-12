@@ -4,29 +4,42 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ENV TERM=xterm-256color
 
-ARG USERNAME=ted
+ARG USERNAME=tdk
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     sudo gosu git curl cmake python3-pip usbutils build-essential \
     python3-colcon-common-extensions \
+    # ros basic tools
     ros-humble-ros-base \
     ros-humble-rmw-cyclonedds-cpp \
+    ros-humble-tf2-ros \
+    ros-humble-tf2-tools \
+    ros-humble-rviz2 \
+    # for web connection (e.g. foxglove)
     ros-humble-rosbridge-server \
     ros-humble-foxglove-bridge \
+    # for nav2
     ros-humble-nav2-msgs \
     ros-humble-nav2-util \
-    ros-humble-slam-toolbox \
-    ros-humble-cartographer \
-    ros-humble-cartographer-ros \
     ros-humble-navigation2 \
     ros-humble-nav2-bringup \
     ros-humble-nav2-mppi-controller \
-    ros-humble-tf2-ros \
-    ros-humble-tf2-tools \
+    # for localization
+    ros-humble-slam-toolbox \
+    ros-humble-cartographer \
+    ros-humble-cartographer-ros \
     ros-humble-laser-filters \
     ros-humble-pcl-ros \
+    # driver pkg
+    ros-humble-phidgets-api \
+    ros-humble-libphidget22 \
+    # for simulation
+    ros-humble-gazebo-ros-pkgs \
+    ros-humble-gazebo-ros-pkgs \
+    ros-humble-teleop-tools \
+    ros-humble-teleop-twist-keyboard \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

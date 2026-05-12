@@ -2,11 +2,11 @@ laser_merger:
   ros__parameters:
     destination_frame: "base_footprint"
     scan_destination_topic: "/scan"
-    laserscan_topics: "/scan_front_filtered /scan_rear_filtered"
+    laserscan_topics: "/front/scan_filtered /rear/scan_filtered"
 
     angle_min: -3.14159
     angle_max: 3.14159
     angle_increment: 0.0058  # adjust according to LiDAR resolution
     scan_time: 0.03333       # 30Hz
-    range_min: 0.15          # 0.15 meter
+    range_min: 0.21          # 0.15 meter
     range_max: 12.0          # 12 meter

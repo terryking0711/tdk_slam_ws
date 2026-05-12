@@ -1,0 +1,11 @@
+<!-- worlds/maze.world -->
+<sdf version="1.6">
+  <world name="default">
+    <include><uri>model://sun</uri></include>
+    <include><uri>model://ground_plane</uri></include>
+    <include>
+      <uri>model://maze</uri>
+      <pose>4.2 4.2 0 0 0 0</pose>
+    </include>
+  </world>
+</sdf>

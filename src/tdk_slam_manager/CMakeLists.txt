@@ -8,6 +8,25 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(gazebo_ros REQUIRED)
+find_package(sensor_msgs REQUIRED)
+
+add_executable(laser_angle_filter_node src/laser_angle_filter.cpp)
+ament_target_dependencies(laser_angle_filter_node rclcpp sensor_msgs)
+
+install(TARGETS
+  laser_angle_filter_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY
+  launch
+  config
+  sim
+  urdf
+  cartographer_config
+  DESTINATION share/${PROJECT_NAME}
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
