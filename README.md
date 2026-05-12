@@ -20,6 +20,77 @@
     source install/setup.bash
     ```
 
+### How to setup (Windows)
+1. 確認 **VcXsrv（XLaunch）** 在工作列執行，且勾選 `Disable access control`
+2. 在 **PowerShell** 啟動容器：
+    ```powershell
+    cd D:\DIT\ros2_projects\tdk_30th\tdk_slam_ws\docker
+    $env:DISPLAY = "host.docker.internal:0.0"
+    docker compose up -d
+    ```
+3. 進入容器並 build：
+    ```bash
+    docker exec -it tdk_slam bash
+    source /opt/ros/humble/setup.bash
+    colcon build --symlink-install
+    source install/setup.bash
+    ```
+
+---
+
+## 模擬建圖 SOP (Windows)
+
+> 每個 Terminal 都需要先執行 `docker exec -it tdk_slam bash` 進入容器
+
+### Terminal 1 — Gazebo 世界
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch tdk_slam_manager maze_world_launch.py
+```
+
+### Terminal 2 — 機器人 + SLAM
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch tdk_slam_manager sim_spawn_launch.py
+```
+
+### Terminal 3 — 鍵盤開車
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+```
+
+### Terminal 4 — RViz 視覺化
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+rviz2
+```
+開啟後手動 Add：
+- `Add → By topic → /map → Map → OK`
+- `Add → By topic → /scan → LaserScan → OK`
+- Fixed Frame 設為 `map`
+
+### 開車按鍵速查
+
+| 按鍵 | 動作 |
+|------|------|
+| `i` | 直走 |
+| `,` | 倒退 |
+| `j` | 左轉 |
+| `l` | 右轉 |
+| `u` | 左前 |
+| `o` | 右前 |
+| `k` | 停止 |
+| `q` / `z` | 加速 / 減速 |
+| `w` / `x` | 增加 / 減少線速度 |
+| `e` / `c` | 增加 / 減少角速度 |
+
+---
+
 ## Localization
 ### pre-mapping mode
 1. modify localization_mode in `sim_spawn_launch.py` (or `spawn_launch.py`)
@@ -37,11 +108,11 @@
 4. Stop mapping and save map
     - save map for slam_toolbox: `ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: 'slam_map_0'}"`
     - save map for nav_amcl: `ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap "{name: {data: 'amcl_map_0'}}"`
-    - save map for catographer: 
+    - save map for catographer:
         1. 停止軌跡: `ros2 service call /finish_trajectory cartographer_ros_msgs/srv/FinishTrajectory "{trajectory_id: 0}"`
         2. 儲存地圖: `ros2 service call /write_state cartographer_ros_msgs/srv/WriteState "{filename: '/home/tdk/tdk_slam_ws/src/tdk_slam_manager/maps/carto_map_0.pbstream', include_unfinished_submaps: true}"`
         3. 序列化地圖 (類似 slam_toolbox 的 serialize): `ros2 service call /write_state cartographer_ros_msgs/srv/WriteState "{filename: '/home/tdk/tdk_slam_ws/src/tdk_slam_manager/maps/carto_map_0.pbstream'}"`
-        4. 將地圖轉換成 nav2 可以使用的圖片: 
+        4. 將地圖轉換成 nav2 可以使用的圖片:
             ```
             ros2 run cartographer_ros cartographer_pbstream_to_ros_map \
                 -pbstream_filename /home/tdk/tdk_slam_ws/src/tdk_slam_manager/maps/carto_map_0.pbstream \
@@ -60,14 +131,18 @@
 2. Launch all the programs for mapping: SAME AS **pre-mapping mode**
 
 ### Interact & Visulization
-   - `rivz2`: can visualize every ros info (robot pose, tf, lidar scan)
+   - `rviz2`: can visualize every ros info (robot pose, tf, lidar scan)
    - `ros2 run teleop_twist_keyboard teleop_twist_keyboard`: move robot around. Can use to create map or test the localization quality
 
 #### notice
 - 用teleop玩車的時候小心翻車。
 
+---
+
 ## Navigation
 
+
+---
 
 ## File Structure
 ```bash
