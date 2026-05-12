@@ -8,5 +8,5 @@ laser_merger:
     angle_max: 3.14159
     angle_increment: 0.0058  # adjust according to LiDAR resolution
     scan_time: 0.03333       # 30Hz
-    range_min: 0.15          # 0.15 meter
+    range_min: 0.21          # 0.15 meter
     range_max: 12.0          # 12 meter

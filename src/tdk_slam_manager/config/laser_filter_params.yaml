@@ -1,8 +1,0 @@
-filter_front:
-  ros__parameters:
-    scan_filter_chain:
-      - name: robot_body_filter
-        type: laser_filters/LaserScanAngularBoundsFilter
-        params:
-          lower_angle: 0.1700
-          upper_angle: 0.1700
