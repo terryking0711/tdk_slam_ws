@@ -5,7 +5,7 @@
     <include><uri>model://ground_plane</uri></include>
     <include>
       <uri>model://maze</uri>
-      <pose>0 0 0 0 0 0</pose>
+      <pose>4.2 4.2 0 0 0 0</pose>
     </include>
   </world>
 </sdf>
