@@ -1,9 +1,9 @@
 slam_toolbox:
   ros__parameters:
-    #mode: localization
-    mode: mapping
-    map_file_name: /home/ted/tdk_slam_ws/src/tdk_slam_manager/maps/slam_map_0
-    map_start_pose: [0.0, 0.0, 0.0] # initial pose of robot
+    mode: localization
+    # mode: mapping
+    map_file_name: "/home/ted/tdk_slam_ws/src/tdk_slam_manager/maps/slam_map_0"
+    map_start_pose: [0.425, 1.0, 0.0] # initial pose of robot
     # tf
     odom_frame: odom
     map_frame: map
