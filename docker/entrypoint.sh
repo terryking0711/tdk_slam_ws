@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-WS_DEST="/home/ted/tdk_slam_ws/src/sensor_dep"
+WS_DEST="/home/tdk/tdk_slam_ws/src/sensor_dep"
 
 mkdir -p $WS_DEST
 
