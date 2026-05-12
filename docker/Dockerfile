@@ -20,6 +20,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-slam-toolbox \
     ros-humble-cartographer \
     ros-humble-cartographer-ros \
+    ros-humble-phidgets-api \
+    ros-humble-libphidget22 \
     ros-humble-navigation2 \
     ros-humble-nav2-bringup \
     ros-humble-nav2-mppi-controller \
