@@ -3,13 +3,13 @@ import xacro
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
+from launch_ros.substitutions import FindPackageShare
 from launch_ros.actions import Node
 from launch.conditions import IfCondition
-from launch.substitutions import PythonExpression
 
 def generate_launch_description():
-    localization_pkg = get_package_share_directory('tdk_slam_manager')
+    localization_pkg = os.path.join('/home/ted/tdk_slam_ws/src/tdk_slam_manager')
     
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
 
@@ -30,35 +30,49 @@ def generate_launch_description():
     spawn_entity = Node(
         package='gazebo_ros',
         executable='spawn_entity.py',
-        arguments=['-topic', 'robot_description', '-entity', 'tdk_robot'],
+        arguments=['-topic', 'robot_description',
+                    '-entity', 'tdk_robot',
+                    '-x', '0.425',
+                    '-y', '1.0',  
+                    ],
         output='screen'
+    )
+    slam_toolbox_params = os.path.join(
+        get_package_share_directory('tdk_slam_manager'),
+        'config',
+        'slam_toolbox_params.yaml'
     )
 
     filter_front = Node(
-        package='laser_filters',
-        executable='scan_to_scan_filter_chain',
+        package='tdk_slam_manager',
+        executable='laser_angle_filter_node',
         name='filter_front',
-        parameters=[os.path.join(localization_pkg, 'config', 'laser_filter_params.yaml'),
-                    {'use_sim_time': use_sim_time}],
-        remappings=[('scan', '/front/scan'), ('scan_filtered', '/front/scan_filtered')]
+        parameters=[{
+            'lower_angle': -3.1415,
+            'upper_angle': -1.5708,
+            'input_topic': '/front/scan',
+            'output_topic': '/front/scan_filtered'
+        }]
     )
 
     filter_rear = Node(
-        package='laser_filters',
-        executable='scan_to_scan_filter_chain',
+        package='tdk_slam_manager',
+        executable='laser_angle_filter_node',
         name='filter_rear',
-        parameters=[os.path.join(localization_pkg, 'config', 'laser_filter_params.yaml'),
-                    {'use_sim_time': use_sim_time}],
-        remappings=[('scan', '/rear/scan'), ('scan_filtered', '/rear/scan_filtered')]
+        parameters=[{
+            'lower_angle': -3.1415,
+            'upper_angle': -1.5708,
+            'input_topic': '/rear/scan',
+            'output_topic': '/rear/scan_filtered'
+        }]
     )
-
 
     merger_node = Node(
         package='ira_laser_tools',
         executable='laserscan_multi_merger',
         name='laser_merger',
-        parameters=[os.path.join(localization_pkg, 'config', 'laser_merger_params.yaml'),
-                    {'use_sim_time': use_sim_time}],
+        parameters=[PathJoinSubstitution([FindPackageShare('tdk_slam_manager'), 'config', 'laser_merger_params.yaml']),
+            {'use_sim_time': use_sim_time}],
         output='screen'
     )
 
@@ -68,10 +82,8 @@ def generate_launch_description():
         executable='async_slam_toolbox_node',
         name='slam_toolbox',
         output='screen',
-        parameters=[
-            os.path.join(localization_pkg, 'config', 'mapper_params_online_async.yaml'),
-            {'use_sim_time': use_sim_time}
-        ]
+        parameters=[PathJoinSubstitution([FindPackageShare('tdk_slam_manager'), 'config', 'mapper_params_online_async.yaml']),
+            {'use_sim_time': use_sim_time}]
     )
 
     localization_node = Node(
@@ -81,19 +93,22 @@ def generate_launch_description():
         name='slam_toolbox',
         output='screen',
         parameters=[
-            os.path.join(localization_pkg, 'config', 'slam_toolbox_params.yaml'),
-            {'use_sim_time': use_sim_time}
+            PathJoinSubstitution([FindPackageShare('tdk_slam_manager'), 'config', 'slam_toolbox_params.yaml']),
+            {
+                'mode': PythonExpression(["'mapping' if '", localization_mode, "' == 'mapping' else 'localization'"]),
+                'use_sim_time': use_sim_time
+            }
         ]
     )
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true'),
-        DeclareLaunchArgument('localization_mode', default_value='mapping'),
-        
+        DeclareLaunchArgument('localization_mode', default_value='slam_toolbox'),
+
         robot_state_publisher,
         spawn_entity,
-        # filter_front,
-        # filter_rear,  
+        filter_front,
+        filter_rear,  
         merger_node,
         mapping_node,
         localization_node
