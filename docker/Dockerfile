@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-cartographer-ros \
     ros-humble-laser-filters \
     ros-humble-pcl-ros \
+    ros-humble-robot-localization \
     # driver pkg
     ros-humble-phidgets-api \
     ros-humble-libphidget22 \
