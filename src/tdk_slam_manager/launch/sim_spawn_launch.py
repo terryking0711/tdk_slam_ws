@@ -37,6 +37,7 @@ def generate_launch_description():
                     ],
         output='screen'
     )
+
     ekf_node = Node(
         package='robot_localization',
         executable='ekf_node',
