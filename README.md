@@ -56,11 +56,11 @@ source install/setup.bash
 ros2 launch tdk_slam_manager sim_spawn_launch.py
 ```
 
-### Terminal 3 — 鍵盤開車
+### Terminal 3 — 導航
 ```bash
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 run teleop_twist_keyboard teleop_twist_keyboard
+ros2 launch tdk_nav2_manager nav_launch.py
 ```
 
 ### Terminal 4 — RViz 視覺化
@@ -69,6 +69,27 @@ source /opt/ros/humble/setup.bash
 source install/setup.bash
 rviz2
 ```
+
+### Terminal(robot_fsm_v2_ws) 5 - 開啟 Navigation server
+```bash
+source /opt/ros/humble/setup.bash
+source ~/tdk_slam_ws/install/setup.bash
+source install/setup.bash
+
+ros2 launch robot_navigation navigation_server.launch.py
+```
+
+### 測試兩個workspace通訊
+```
+ros2 action send_goal /navigate_to_named_pose robot_interfaces/action/NavigateToNamedPose "{target_name: 'stage1_entry', timeout_sec: 20.0}" --feedback
+```
+### Terminal 補充 — 鍵盤開車
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+```
+
 開啟後手動 Add：
 - `Add → By topic → /map → Map → OK`
 - `Add → By topic → /scan → LaserScan → OK`
