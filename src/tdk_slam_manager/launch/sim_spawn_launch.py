@@ -38,6 +38,15 @@ def generate_launch_description():
         output='screen'
     )
 
+    ekf_node = Node(
+        package='robot_localization',
+        executable='ekf_node',
+        name='ekf_filter_node',
+        output='screen',
+        parameters=[PathJoinSubstitution([FindPackageShare('tdk_slam_manager'), 'config', 'ekf_config.yaml']),
+            {'use_sim_time': use_sim_time}]
+    )
+
     filter_front = Node(
         package='tdk_slam_manager',
         executable='laser_angle_filter_node',
@@ -144,6 +153,7 @@ def generate_launch_description():
 
         robot_state_publisher,
         spawn_entity,
+        ekf_node,
         filter_front,
         filter_rear,  
         merger_node,

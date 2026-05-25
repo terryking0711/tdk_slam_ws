@@ -163,8 +163,6 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ## Navigation
 
 
----
-
 ## File Structure
 ```bash
 ├── sensor_dep

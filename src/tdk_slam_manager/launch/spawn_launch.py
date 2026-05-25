@@ -14,7 +14,7 @@ def generate_launch_description():
     sllidar_pkg = get_package_share_directory('rplidar_ros')
     use_sim_time = LaunchConfiguration('use_sim_time', default='false')
     localization_mode = LaunchConfiguration('localization_mode', default='mapping')
-    # map_yaml_file = os.path.join(localization_pkg, 'maps', 'slam_map_0.yaml')
+    map_file = "/home/tdk/tdk_slam_ws/src/tdk_slam_manager/maps/slam_map_0"
     
     xacro_file = os.path.join(localization_pkg, 'urdf', 'sensors.urdf.xacro')
     robot_description_raw = xacro.process_file(xacro_file).toxml()
@@ -27,6 +27,15 @@ def generate_launch_description():
             'robot_description': robot_description_raw,
             'use_sim_time': use_sim_time
         }]
+    )
+
+    ekf_node = Node(
+        package='robot_localization',
+        executable='ekf_node',
+        name='ekf_filter_node',
+        output='screen',
+        parameters=[PathJoinSubstitution([FindPackageShare('wildbot_slam_manager'), 'config', 'ekf_config.yaml']),
+            {'use_sim_time': use_sim_time}]
     )
 
     # start RPLiDAR S3
@@ -94,6 +103,7 @@ def generate_launch_description():
             PathJoinSubstitution([FindPackageShare('tdk_slam_manager'), 'config', 'slam_toolbox_params.yaml']),
             {
                 'mode': PythonExpression(["'mapping' if '", localization_mode, "' == 'mapping' else 'localization'"]),
+                'map_file_name': map_file,
                 'use_sim_time': use_sim_time
             }
         ]
@@ -111,10 +121,6 @@ def generate_launch_description():
             '-configuration_directory', os.path.join(localization_pkg, 'cartographer_config'),
             '-configuration_basename', 'cartographer_2d.lua'
         ]
-        # ,remappings=[
-        #     ('/scan', '/scan'),
-        #     ('/odom', '/odom')
-        # ]
     )
     # Convert Submap to OccupancyGrid
     occupancy_grid_node = Node(
@@ -180,6 +186,7 @@ def generate_launch_description():
         DeclareLaunchArgument('localization_mode', default_value='mapping'),
 
         robot_state_publisher,
+        ekf_node,
         lidar_front,
         lidar_rear,
         filter_front,
