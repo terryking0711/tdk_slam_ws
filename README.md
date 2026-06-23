@@ -46,6 +46,8 @@
 ```bash
 source /opt/ros/humble/setup.bash
 source install/setup.bash
+export GAZEBO_MODEL_DATABASE_URI=""
+export LIBGL_ALWAYS_SOFTWARE=1
 ros2 launch tdk_slam_manager maze_world_launch.py
 ```
 
