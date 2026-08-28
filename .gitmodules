@@ -2,3 +2,6 @@
 	path = src/ira_laser_tools
 	url = https://github.com/nakai-omer/ira_laser_tools.git
 	branch = humble
+[submodule "src/realsense-ros"]
+	path = src/realsense-ros
+	url = https://github.com/IntelRealSense/realsense-ros.git

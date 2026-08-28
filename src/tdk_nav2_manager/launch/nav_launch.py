@@ -3,10 +3,14 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    GroupAction,
+    IncludeLaunchDescription,
+)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import Node, SetRemap
 
 
 def generate_launch_description():
@@ -59,6 +63,15 @@ def generate_launch_description():
         }.items()
     )
 
+    # Nav2 Humble remaps controller_server to cmd_vel_nav, but leaves the
+    # behavior_server recovery plugins publishing directly to cmd_vel. Route
+    # every raw Nav2 velocity command through velocity_smoother so cmd_vel has
+    # one effective producer: velocity_smoother (cmd_vel_smoothed -> cmd_vel).
+    nav2_group = GroupAction(actions=[
+        SetRemap(src='cmd_vel', dst='cmd_vel_nav'),
+        nav2_launch,
+    ])
+
     return LaunchDescription([
         DeclareLaunchArgument(
             'use_sim_time',
@@ -72,5 +85,5 @@ def generate_launch_description():
         ),
         map_server_node,
         lifecycle_manager_map,
-        nav2_launch,
+        nav2_group,
     ])
