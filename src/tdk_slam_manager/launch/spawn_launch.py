@@ -121,8 +121,8 @@ def generate_launch_description():
         executable='laser_angle_filter_node',
         name='filter_front',
         parameters=[{
-            'lower_angle': -1.5707,
-            'upper_angle': -3.1415,
+            'lower_angle': 0.0,
+            'upper_angle': 1.5707,
             'input_topic': '/front/scan',
             'output_topic': '/front/scan_filtered'
         }]
@@ -133,8 +133,8 @@ def generate_launch_description():
         executable='laser_angle_filter_node',
         name='filter_rear',
         parameters=[{
-            'lower_angle': -1.5707,
-            'upper_angle': -3.1415,
+            'lower_angle': 0.0,
+            'upper_angle': 1.5707,
             'input_topic': '/rear/scan',
             'output_topic': '/rear/scan_filtered'
         }]
