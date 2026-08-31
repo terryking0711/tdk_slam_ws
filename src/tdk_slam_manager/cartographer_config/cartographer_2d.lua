@@ -36,22 +36,28 @@ TRAJECTORY_BUILDER_2D.min_range = 0.1
 TRAJECTORY_BUILDER_2D.max_range = 12.0
 
 
--- 大幅增加 LiDAR 掃描特徵與子地圖匹配的權重 (預設通常是 1.0)
-TRAJECTORY_BUILDER_2D.ceres_scan_matcher.occupied_space_weight = 40.0
--- 降低對 Odom 平移與旋轉的信任 (預設通常為 10.0 和 40.0)
-TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 20.0
-TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 5.0
+-- Pinpoint odometry 已校正過，精度可信任，權重改回接近官方預設，
+-- 平衡 LiDAR 與 Odom 的信任度。過去 occupied_space_weight/translation_weight
+-- 遠高於 rotation_weight 的組合，在貼牆的長直牆面會欠約束（aperture problem）：
+-- 掃描點沿牆滑動時殘差幾乎不變，優化器會讓 pose 沿牆漂移；rotation_weight 過低
+-- 又讓 yaw 抖動被麥輪運動學直接轉成橫向修正指令，兩者合起來就是 cmd_vel 震盪。
+TRAJECTORY_BUILDER_2D.ceres_scan_matcher.occupied_space_weight = 20.0
+TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 10.0
+TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 40.0
 
--- 因為上方已開啟 use_online_correlative_scan_matching，此處降低偏離 Odom 的懲罰
--- 讓系統在暴力搜尋時，更自由地用 LiDAR 找最佳吻合點
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.translation_delta_cost_weight = 0.01
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.rotation_delta_cost_weight = 0.01
+-- 回官方預設：0.01 等於允許暴力搜尋（real-time correlative scan matcher）
+-- 在整個 search window 內自由亂跑，不受偏離 Odom 的懲罰
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.translation_delta_cost_weight = 0.1
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.rotation_delta_cost_weight = 0.1
 
 -- 3. 後端位姿圖優化 (Global SLAM)
--- 降低後端優化時對 Odom 約束的權重 (預設通常是 1e5)
-POSE_GRAPH.optimization_problem.odometry_translation_weight = 1e2
-POSE_GRAPH.optimization_problem.odometry_rotation_weight = 1e2
+-- 提高後端優化對 Odom 約束的權重，讓 Pinpoint 的精度真正被信任
+-- (仍維持在官方預設 1e5 以下一個數量級，保留給 LiDAR loop closure 修正空間)
+POSE_GRAPH.optimization_problem.odometry_translation_weight = 1e4
+POSE_GRAPH.optimization_problem.odometry_rotation_weight = 1e4
 
+-- 官方預設值參考（目前策略以此為基準；occupied_space_weight 與 POSE_GRAPH
+-- odometry 權重刻意偏離預設，理由見上方註解）：
 -- -- Ceres scan matcher (defaults)
 -- TRAJECTORY_BUILDER_2D.ceres_scan_matcher.occupied_space_weight = 1.0
 -- TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 10.0
