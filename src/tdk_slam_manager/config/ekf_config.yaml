@@ -1,4 +1,8 @@
 # ============================================================================
+# ⚠ 目前未啟用：spawn_launch.py 裡的 ekf_node 是註解掉的，實際跑的是
+#   odom_tf_broadcaster_node，全系統吃 raw /odom。下面「輸出 /odometry/filtered」
+#   等描述是這組設定被啟用時的預期行為，不是目前的實際狀態。
+#
 # robot_localization EKF 設定
 #
 # 取代原本的 odom_tf_broadcaster，負責發布 odom -> base_footprint 的 TF，

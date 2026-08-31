@@ -1,3 +1,5 @@
+# 這是唯一被 nav_launch.py 載入的 Nav2 參數檔。config/_unused/ 下的檔案
+# 均未使用，詳見該目錄 README。
 # bt_navigator
 bt_navigator:
   ros__parameters:
