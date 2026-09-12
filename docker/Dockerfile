@@ -43,6 +43,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# RealSense ROS wrapper dependency and device utilities.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gnupg wget ca-certificates \
+    && mkdir -p /etc/apt/keyrings \
+    && wget -qO /tmp/librealsense-keyring.deb \
+    https://librealsense.intel.com/Debian/apt-repo/pool/main/i/intel-realsense-realsense2-archive-keyring/intel-realsense-realsense2-archive-keyring_1.1_all.deb \
+    && dpkg -i /tmp/librealsense-keyring.deb \
+    && rm /tmp/librealsense-keyring.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends librealsense2-dev librealsense2-utils \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --gid $USER_GID $USERNAME \
     && useradd --uid $USER_UID --gid $USER_GID -m -s /bin/bash $USERNAME \
     && usermod -aG dialout $USERNAME \

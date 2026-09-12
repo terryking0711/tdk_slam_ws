@@ -8,6 +8,8 @@ bt_navigator:
     # ★ 重規劃頻率不在本檔!是由這個 BT XML 內的 RateController hz="1.0" 決定。
     #   想降低重規劃頻率(已知地圖建議 0.5Hz 甚至改距離觸發),需複製此 XML 改 hz 後
     #   把路徑填到這裡。詳見對話說明。
+    # ※ 注意:Humble 這個參數名應為 default_nav_to_pose_bt_xml,且要填完整路徑。
+    #   目前這行會被靜默忽略,實際跑的是 Nav2 預設 BT。第一步先不動,之後再處理。
     default_bt_xml_filename: "navigate_w_replanning_and_recovery.xml"
 
     plugin_lib_names:
@@ -79,8 +81,8 @@ controller_server:
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.07           # 5 cm,精準停靠(依你要求維持)
-      yaw_goal_tolerance: 0.14          # ~5.7°
+      xy_goal_tolerance: 0.06           # 6 cm,精準停靠(依你要求維持)
+      yaw_goal_tolerance: 0.05          # ~2.9°
       stateful: True                    # xy 達標後只檢查 yaw,防止來回追 xy
 
     FollowPath:
@@ -110,7 +112,7 @@ controller_server:
       ay_max: 0.3                       # 麥輪橫移需要足夠的爆發力克服摩擦力
       ay_min: -0.3
       az_max: 0.6                       # 旋轉加速度保持 1.0，反應較靈敏
-      
+
       temperature: 0.4
       gamma: 0.015
 
@@ -121,7 +123,9 @@ controller_server:
       visualize: false
 
       retry_attempt_limit: 3
-      regenerate_noises: true
+      # ★【抖動第一步 4/5】true→false:每輪重新抽樣噪聲會讓相鄰兩輪的最佳解不連續,
+      #   輸出就是高頻鋸齒。改 false 讓噪聲序列在迭代間重用,cmd_vel 明顯變平順。
+      regenerate_noises: false
 
       critics: [
         "ConstraintCritic", "CostCritic", "GoalCritic",
@@ -138,7 +142,11 @@ controller_server:
         cost_power: 1
         cost_weight: 3.0
         critical_cost: 300.0
-        consider_footprint: true
+        # ★【抖動第一步 3/5】true→false:逐點做 footprint 碰撞檢查會把成本變成
+        #   「撞/不撞」二值,MPPI 加權平均沒有梯度可用,靠牆就 bang-bang。
+        #   改 false 後改用中心點查膨脹成本;因為下面 local inflation 已放大到 0.45
+        #   (> 外接半徑 0.318),車體尺寸已隱含在成本場裡,安全性不受影響,順便省 CPU。
+        consider_footprint: false
         collision_cost: 1000000.0
         near_collision_cost: 253
         near_goal_distance: 0.5
@@ -185,6 +193,9 @@ controller_server:
         max_angle_to_furthest: 1.0
         mode: 1
 
+      # ※ nav2_mppi_controller 沒有 MotionCritic 這個 plugin,w_excessive_acceleration
+      #   也不是真的參數,而且它本來就不在上面的 critics: 清單裡 → 整段是無效設定。
+      #   第一步先保留不動(不影響行為),第三步要加抑制抖動的 critic 時改用 TwirlingCritic。
       MotionCritic:
         enabled: true
         cost_power: 1
@@ -277,6 +288,7 @@ local_costmap:
       resolution: 0.05
 
       # 45cm x 45cm 方形車體。前提:base_footprint 在車體幾何中心。
+      # 內切半徑 = 0.225 m,外接半徑 = 0.225 * sqrt(2) = 0.318 m
       footprint: "[[-0.225, -0.225], [-0.225, 0.225], [0.225, 0.225], [0.225, -0.225]]"
       footprint_padding: 0.01
 
@@ -302,8 +314,14 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         enabled: True
-        inflation_radius: 0.20
-        cost_scaling_factor: 5.0
+        # ★【抖動第一步 1/5】0.20→0.45:原值比內切半徑 0.225 還小,
+        #   InflationLayer 的衰減區間等於不存在 → 牆邊 0.2m 內全是 253、外面直接 0,
+        #   成本場是懸崖不是斜坡,MPPI 沒有梯度可跟,靠牆必抖。
+        #   0.45 > 外接半徑 0.318,才會有真正的連續梯度,也與 global 一致。
+        inflation_radius: 0.45
+        # ★【抖動第一步 2/5】5.0→2.5:衰減係數放小,成本從牆面平緩下降,
+        #   配合上面的 0.45 才能形成可微的成本坡。
+        cost_scaling_factor: 2.5
 
       always_send_full_costmap: True
 
@@ -349,6 +367,8 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         enabled: True
+        # ※ 第一步維持不動。若任務點是貼牆的(距牆 < 0.45m),再執行第二步把這裡
+        #   改成 0.30 / 2.0,否則 planner 會因終點成本過高而只規劃到 0.2m 外。
         inflation_radius: 0.45
         cost_scaling_factor: 4.0
 
@@ -386,7 +406,10 @@ velocity_smoother:
 
     odom_topic: /odom
     odom_duration: 0.1
-    deadband_velocity: [0.0, 0.0, 0.0]
+    # ★【抖動第一步 5/5】全 0 → 給死區:低於此值的指令直接輸出 0,
+    #   直接吃掉圖上那種 ±0.05 m/s 的殘留鋸齒(麥輪在這個速度本來也推不動)。
+    #   若發現最後幾公分收斂變慢,把 x/y 降到 0.015 再試。
+    deadband_velocity: [0.02, 0.02, 0.04]
     velocity_timeout: 1.0
 
 # Lifecycle Manager
