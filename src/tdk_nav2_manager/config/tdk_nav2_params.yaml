@@ -81,8 +81,8 @@ controller_server:
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.06           # 6 cm,精準停靠(依你要求維持)
-      yaw_goal_tolerance: 0.05          # ~2.9°
+      xy_goal_tolerance: 0.03           # 6 cm,精準停靠(依你要求維持)
+      yaw_goal_tolerance: 0.02          # ~2.9°
       stateful: True                    # xy 達標後只檢查 yaw,防止來回追 xy
 
     FollowPath:
@@ -318,7 +318,7 @@ local_costmap:
         #   InflationLayer 的衰減區間等於不存在 → 牆邊 0.2m 內全是 253、外面直接 0,
         #   成本場是懸崖不是斜坡,MPPI 沒有梯度可跟,靠牆必抖。
         #   0.45 > 外接半徑 0.318,才會有真正的連續梯度,也與 global 一致。
-        inflation_radius: 0.45
+        inflation_radius: 0.01
         # ★【抖動第一步 2/5】5.0→2.5:衰減係數放小,成本從牆面平緩下降,
         #   配合上面的 0.45 才能形成可微的成本坡。
         cost_scaling_factor: 2.5
@@ -342,27 +342,27 @@ global_costmap:
 
       plugins:
         - static_layer
-        - obstacle_layer
+        # - obstacle_layer
         - inflation_layer
 
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
 
-      obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: True
-        observation_sources: scan
-        scan:
-          topic: /scan
-          max_obstacle_height: 2.0
-          clearing: True
-          marking: True
-          data_type: "LaserScan"
-          raytrace_max_range: 3.0
-          raytrace_min_range: 0.0
-          obstacle_max_range: 2.5
-          obstacle_min_range: 0.0
+      # obstacle_layer:
+      #   plugin: "nav2_costmap_2d::ObstacleLayer"
+      #   enabled: True
+      #   observation_sources: scan
+      #   scan:
+      #     topic: /scan
+      #     max_obstacle_height: 2.0
+      #     clearing: True
+      #     marking: True
+      #     data_type: "LaserScan"
+      #     raytrace_max_range: 3.0
+      #     raytrace_min_range: 0.0
+      #     obstacle_max_range: 2.5
+      #     obstacle_min_range: 0.0
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"

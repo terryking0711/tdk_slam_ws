@@ -5,15 +5,15 @@ base:
   mass: 150.0 
 sensors:
   front_lidar:
-    x: 0.1692    
-    y: 0.1692    
+    x: 0.19    
+    y: 0.21    
     z: 0.05    
     roll: 0.0
     pitch: 0.0 
     yaw: 3.1415926   
   rear_lidar:
-    x: -0.1692 
-    y: -0.1692 
+    x: -0.19 
+    y: -0.21 
     z: 0.05
     roll: 0.0
     pitch: 0.0

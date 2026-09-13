@@ -8,6 +8,7 @@ public:
     LaserAngleFilter() : Node("laser_angle_filter") {
         this->declare_parameter("lower_angle", -0.17);
         this->declare_parameter("upper_angle", 0.17);
+        this->declare_parameter("self_clearance", 0.20);
         this->declare_parameter<std::string>("input_topic", "/scan");
         this->declare_parameter<std::string>("output_topic", "/scan_filtered");
 
@@ -17,7 +18,7 @@ public:
         sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
             input_topic, 10, std::bind(&LaserAngleFilter::scan_callback, this, std::placeholders::_1));
 
-        RCLCPP_INFO(this->get_logger(), "C++ 雷達角度濾波器已啟動");
+        RCLCPP_INFO(this->get_logger(), "C++ 雷達角度與近距離濾波器已啟動，self_clearance = %.2f m", this->get_parameter("self_clearance").as_double());
     }
 
 private:
@@ -28,13 +29,16 @@ private:
         
         double lower = this->get_parameter("lower_angle").as_double();
         double upper = this->get_parameter("upper_angle").as_double();
+        double self_clearance = this->get_parameter("self_clearance").as_double();
 
         for (size_t i = 0; i < filtered_scan.ranges.size(); ++i) {
             // 計算當前點的角度
             double angle = msg->angle_min + i * msg->angle_increment;
+            double range = filtered_scan.ranges[i];
 
-            // 邏輯：如果在指定的角度區間內，將距離設為無窮大 (inf)
-            if (angle >= lower && angle <= upper) {
+            // 1) 移除機器人本體附近 20cm 以內的點，避免把自己當成障礙物
+            // 2) 保留原本的角度範圍過濾邏輯
+            if (range <= self_clearance || (angle >= lower && angle <= upper)) {
                 filtered_scan.ranges[i] = std::numeric_limits<float>::infinity();
             }
         }

@@ -45,6 +45,7 @@ def generate_launch_description():
         parameters=[{
             'lower_angle': -3.1415,
             'upper_angle': -1.5708,
+            'self_clearance': 0.20,
             'input_topic': '/front/scan',
             'output_topic': '/front/scan_filtered'
         }]
@@ -57,6 +58,7 @@ def generate_launch_description():
         parameters=[{
             'lower_angle': -3.1415,
             'upper_angle': -1.5708,
+            'self_clearance': 0.20,
             'input_topic': '/rear/scan',
             'output_topic': '/rear/scan_filtered'
         }]
