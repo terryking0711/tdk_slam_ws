@@ -1,5 +1,6 @@
 import os
 import xacro
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction
@@ -25,8 +26,15 @@ WORLD_TO_MAP_X = 0.425
 WORLD_TO_MAP_Y = 1.0
 
 
+def load_map_name(pkg_dir):
+    # 換地圖統一改 config/map_config.yaml 的 map_name
+    with open(os.path.join(pkg_dir, 'config', 'map_config.yaml')) as f:
+        return yaml.safe_load(f)['map_name']
+
+
 def generate_launch_description():
     localization_pkg = get_package_share_directory('tdk_slam_manager')
+    map_name = load_map_name(localization_pkg)
     sllidar_pkg = get_package_share_directory('rplidar_ros')
     use_sim_time = LaunchConfiguration('use_sim_time', default='false')
     localization_mode = LaunchConfiguration('localization_mode', default='mapping')
@@ -218,14 +226,14 @@ def generate_launch_description():
         arguments=[
             '-configuration_directory', os.path.join(localization_pkg, 'cartographer_config'),
             '-configuration_basename', 'localization.lua',
-            '-load_state_filename', os.path.join(localization_pkg, 'maps', 'real_map_0.pbstream')
+            '-load_state_filename', os.path.join(localization_pkg, 'maps', map_name + '.pbstream')
         ],
         remappings=[
             ('odom', '/odom')
         ]
     )
 
-    map_yaml_file = os.path.join(localization_pkg, 'maps', 'real_map_0.yaml')
+    map_yaml_file = os.path.join(localization_pkg, 'maps', map_name + '.yaml')
 
     # map_server
     map_server_node = Node(

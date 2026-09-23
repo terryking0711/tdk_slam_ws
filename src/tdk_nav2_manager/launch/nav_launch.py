@@ -1,5 +1,7 @@
 import os
 
+import yaml
+
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
@@ -17,6 +19,10 @@ def generate_launch_description():
     nav2_bringup_dir = get_package_share_directory('nav2_bringup')
     tdk_nav2_dir = get_package_share_directory('tdk_nav2_manager')
     tdk_slam_dir = get_package_share_directory('tdk_slam_manager')
+
+    # 換地圖統一改 tdk_slam_manager/config/map_config.yaml 的 map_name
+    with open(os.path.join(tdk_slam_dir, 'config', 'map_config.yaml')) as f:
+        map_name = yaml.safe_load(f)['map_name']
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     map_yaml_file = LaunchConfiguration('map')
@@ -80,7 +86,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'map',
-            default_value=os.path.join(tdk_slam_dir, 'maps', 'real_map_0.yaml'),
+            default_value=os.path.join(tdk_slam_dir, 'maps', map_name + '.yaml'),
             description='Full path to pre-scanned map yaml file'
         ),
         map_server_node,

@@ -1,0 +1,6 @@
+image: /workspaces/tdk_slam_ws/src/tdk_slam_manager/maps/map_normal.pgm
+resolution: 0.050000
+origin: [-3.200000, -1.853078, 0.0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196

@@ -87,17 +87,16 @@ controller_server:
 
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      motion_model: "Omni"             # ★ 麥輪/全向輪用 Omni（會輸出 vy）
+      motion_model: "Omni"
 
-      time_steps: 32                    # 32 * 0.1 = 3.2 s 預測視野
+      # ★ 視野長度必須 ≈ prune_distance / vx_max,否則 PathFollowCritic(比「軌跡終點」與路徑終點的距離)
+      #   會偏好「剛好在視野結束時走到 0.6m 路徑終點」的慢速軌跡 → 速度被壓在 0.1~0.4。
+      time_steps: 20                    # ★改 32→20:20 * 0.1 = 2.0 s,0.8 m/s 下走 1.6 m < prune_distance 1.7
       model_dt: 0.1                     # ★改 0.05→0.1:必須 = 1 / controller_frequency(現為10Hz)，否則 MPPI configure() 會丟例外導致 controller_server FATAL 崩潰
       batch_size: 1000
-                        # CPU 吃緊可降到 1000（精度略降但仍可用）
-
-# --- 取樣標準差：根據 $std \approx v_{max} / 2$ 左右調整，保持靈敏度且不浪費採樣點 ---
       vx_std: 0.40
       vy_std: 0.40
-      wz_std: 0.60
+      wz_std: 0.30                      # ★改 0.60→0.30:麥輪路途中不需要大角度取樣,減少亂轉的候選軌跡
 
       # --- 速度上限（已調高至 1.0）---
       vx_max:  0.8
@@ -118,18 +117,19 @@ controller_server:
 
       # ★微調：由於最高速提升，前瞻視野距離變大 (0.195 * 2.0s = 0.39m)
       # 將 prune_distance 從 0.4 稍微放寬至 0.5m，留給 MPPI 裁剪歷史路徑時更多餘裕
-      prune_distance: 0.5
+      prune_distance: 1.7               # ★改 0.6→1.7(Nav2 預設):要 ≥ vx_max * 視野(0.8*2.0=1.6),且在 local costmap 內
       transform_tolerance: 0.3
       visualize: false
 
       retry_attempt_limit: 3
       # ★【抖動第一步 4/5】true→false:每輪重新抽樣噪聲會讓相鄰兩輪的最佳解不連續,
       #   輸出就是高頻鋸齒。改 false 讓噪聲序列在迭代間重用,cmd_vel 明顯變平順。
-      regenerate_noises: false
+      regenerate_noises: true
 
       critics: [
         "ConstraintCritic", "CostCritic", "GoalCritic",
-        "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic"
+        "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic",
+        "TwirlingCritic"
       ]
 
       ConstraintCritic:
@@ -142,10 +142,6 @@ controller_server:
         cost_power: 1
         cost_weight: 3.0
         critical_cost: 300.0
-        # ★【抖動第一步 3/5】true→false:逐點做 footprint 碰撞檢查會把成本變成
-        #   「撞/不撞」二值,MPPI 加權平均沒有梯度可用,靠牆就 bang-bang。
-        #   改 false 後改用中心點查膨脹成本;因為下面 local inflation 已放大到 0.45
-        #   (> 外接半徑 0.318),車體尺寸已隱含在成本場裡,安全性不受影響,順便省 CPU。
         consider_footprint: false
         collision_cost: 1000000.0
         near_collision_cost: 253
@@ -162,20 +158,29 @@ controller_server:
         enabled: true
         cost_power: 1
         cost_weight: 4.0
-        threshold_to_consider: 0.20
+        threshold_to_consider: 0.50     # ★改 0.20→0.50:與 PathAlign 交接,離終點 0.5m 內才開始轉向目標 yaw
 
       # 麥輪沒有「正面」概念,禁用前進偏好,才能自由橫移/斜走。
       PreferForwardCritic:
         enabled: false
 
+      # ★ 路途中鎖車頭:planner 開了 straight_line_hold_start_orientation,路徑每個點的 yaw
+      #   都是起點車頭方向;use_path_orientations 讓 yaw 偏差也算進成本,車頭歪了會被拉回來。
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 1.5
+        cost_weight: 10.0               # ★改 1.5→10.0(Nav2 預設):原值太弱,拉不住車頭/路徑
+        use_path_orientations: true     # ★新增
         max_path_occupancy_ratio: 0.10
         trajectory_point_step: 4
-        threshold_to_consider: 0.6
+        threshold_to_consider: 0.50     # ★改 0.6→0.5:與 GoalAngleCritic 無縫交接
         offset_from_furthest: 8
+
+      # ★新增:懲罰旋轉速度,壓掉 MPPI 取樣帶來的隨機 wz
+      TwirlingCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0                # ★改 10→3:太大會連「把車頭轉回來」的修正也一起懲罰
 
       PathFollowCritic:
         enabled: true
@@ -192,16 +197,6 @@ controller_server:
         threshold_to_consider: 0.5
         max_angle_to_furthest: 1.0
         mode: 1
-
-      # ※ nav2_mppi_controller 沒有 MotionCritic 這個 plugin,w_excessive_acceleration
-      #   也不是真的參數,而且它本來就不在上面的 critics: 清單裡 → 整段是無效設定。
-      #   第一步先保留不動(不影響行為),第三步要加抑制抖動的 critic 時改用 TwirlingCritic。
-      MotionCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 3.0
-        # 關鍵參數：極力懲罰過大的加速度跳變。數值越大，馬達出力越平滑
-        w_excessive_acceleration: 5
 
 # Planner：Smac 2D（全向,不考慮車頭,適合麥輪）
 planner_server:
@@ -222,9 +217,15 @@ planner_server:
       max_planning_time: 2.0
       cost_travel_multiplier: 2.0
       use_final_approach_orientation: false
+      straight_line_hold_start_orientation: true  # 路徑每點 yaw = 起點車頭(麥輪鎖車頭平移),最後一點 = 目標 yaw
+
+      # 直線化（src/nav2_smac_planner 客製版）：A* 結果做 line-of-sight 抽點，再沿直線重新取樣
+      straight_line_max_skip_points: 50     # 每段最多往前跳幾個 A* 點找無障礙直線（<1 則關閉直線化）
+      straight_line_resample_points: 50     # spacing=0 時，每段直線固定取樣點數
+      straight_line_resample_spacing: 0.05  # >0 時改用固定間距(m)取樣，必須寫成浮點數
 
       smoother:
-        max_iterations: 1000
+        max_iterations: 0                   # 0 = 關閉 smoother，保持路徑完全是直線（原為 1000）
         w_smooth: 0.3
         w_data: 0.2
         tolerance: 1.0e-10
@@ -283,8 +284,9 @@ local_costmap:
       rolling_window: true
 
       # ★改 4x4→3x3:MPPI 視野縮短(~0.26m)+prune 0.4m,3m 視窗綽綽有餘,省 CPU
-      width: 3
-      height: 3
+      # ★改 3x3→4x4:半寬 2.0m 才裝得下 prune_distance 1.7m 的路徑,超出 costmap 的路徑點會被 MPPI 判為無效
+      width: 4
+      height: 4
       resolution: 0.05
 
       # 45cm x 45cm 方形車體。前提:base_footprint 在車體幾何中心。
@@ -409,7 +411,8 @@ velocity_smoother:
     # ★【抖動第一步 5/5】全 0 → 給死區:低於此值的指令直接輸出 0,
     #   直接吃掉圖上那種 ±0.05 m/s 的殘留鋸齒(麥輪在這個速度本來也推不動)。
     #   若發現最後幾公分收斂變慢,把 x/y 降到 0.015 再試。
-    deadband_velocity: [0.02, 0.02, 0.04]
+    # ★改 theta 0.04→0.01:車頭修正的 wz 通常很小(<0.04 rad/s),原本會被整個吃掉,車頭只能一路偏
+    deadband_velocity: [0.02, 0.02, 0.01]
     velocity_timeout: 1.0
 
 # Lifecycle Manager
