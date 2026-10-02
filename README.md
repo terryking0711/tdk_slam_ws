@@ -5,6 +5,31 @@ TDK 30 屆競賽機器人的**定位 + 導航** workspace，與主程式 [`robot
 - 分支：`tmep_ver`（實機用）
 - 環境：ROS2 Humble + Docker（`docker/`），CycloneDDS，`ROS_DOMAIN_ID=30`
 
+## Docker 快速開始
+
+所有相依套件都已裝在 image 裡，`src/` 內的套件（含 `ira_laser_tools`、`rplidar_ros`）都直接放在 repo 中，不需要 submodule 或 `rosdep install`。
+
+```bash
+# 1. clone + 啟動 container（第一次會 build image，約 10~20 分鐘）
+git clone https://github.com/terryking0711/tdk_slam_ws.git
+cd tdk_slam_ws/docker
+docker compose up -d        # 或 ./docker_run.sh（會自動帶 UID/GID 並開放 X11）
+
+# 2. 進入 container
+docker exec -it tdk_slam bash
+
+# 3. 在 container 內 build（工作目錄已是 ~/tdk_slam_ws）
+colcon build --symlink-install
+source install/setup.bash
+```
+
+- 之後開新 terminal `docker exec -it tdk_slam bash` 會自動 source `install/setup.bash`
+- 容器內快捷指令：`cb` = build + source，`sw` = source `install/setup.bash`
+- GUI（rviz2 / gazebo）：主機先執行 `xhost +local:docker`（`docker_run.sh` 已包含）
+- 主機使用者 UID 不是 1000 時請用 `./docker_run.sh`，否則 build 產物的檔案擁有者會不對
+- 可用環境變數覆蓋：`ROS_DOMAIN_ID`（預設 30）、`RMW_IMPLEMENTATION`（預設 cyclonedds）
+- 修改 Dockerfile 後：`docker compose up -d --build`；關閉：`docker compose down`
+
 ---
 
 ## 整體系統架構（跨兩個 workspace）

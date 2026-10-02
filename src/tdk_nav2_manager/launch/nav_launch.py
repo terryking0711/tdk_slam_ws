@@ -9,20 +9,39 @@ from launch.actions import (
     DeclareLaunchArgument,
     GroupAction,
     IncludeLaunchDescription,
+    LogInfo,
+    OpaqueFunction,
+    SetLaunchConfiguration,
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, SetRemap
 
 
+FIELD_CONFIG_FILE = '/workspaces/field_config.yaml'
+
+
+def resolve_map(context):
+    # map:=<yaml> 有給就直接用；沒給就依 field_side 從 field_config.yaml 選地圖
+    if LaunchConfiguration('map').perform(context):
+        return []
+    with open(FIELD_CONFIG_FILE) as f:
+        field_config = yaml.safe_load(f)
+    field_side = LaunchConfiguration('field_side').perform(context) or field_config['default_side']
+    if field_side not in field_config['sides']:
+        raise RuntimeError(
+            f"field_side '{field_side}' not in {FIELD_CONFIG_FILE} sides {list(field_config['sides'])}")
+    map_yaml = os.path.join(
+        field_config['maps_dir'], field_config['sides'][field_side]['map_name'] + '.yaml')
+    return [
+        LogInfo(msg=f'[nav_launch] field_side = {field_side}, map = {map_yaml}'),
+        SetLaunchConfiguration('map', map_yaml),
+    ]
+
+
 def generate_launch_description():
     nav2_bringup_dir = get_package_share_directory('nav2_bringup')
     tdk_nav2_dir = get_package_share_directory('tdk_nav2_manager')
-    tdk_slam_dir = get_package_share_directory('tdk_slam_manager')
-
-    # 換地圖統一改 tdk_slam_manager/config/map_config.yaml 的 map_name
-    with open(os.path.join(tdk_slam_dir, 'config', 'map_config.yaml')) as f:
-        map_name = yaml.safe_load(f)['map_name']
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     map_yaml_file = LaunchConfiguration('map')
@@ -85,10 +104,16 @@ def generate_launch_description():
             description='Use simulation clock if true'
         ),
         DeclareLaunchArgument(
-            'map',
-            default_value=os.path.join(tdk_slam_dir, 'maps', map_name + '.yaml'),
-            description='Full path to pre-scanned map yaml file'
+            'field_side',
+            default_value='',
+            description='normal / mirror（空白 = field_config.yaml 的 default_side）'
         ),
+        DeclareLaunchArgument(
+            'map',
+            default_value='',
+            description='Full path to map yaml（空白 = 依 field_side 從 field_config.yaml 選）'
+        ),
+        OpaqueFunction(function=resolve_map),
         map_server_node,
         lifecycle_manager_map,
         nav2_group,

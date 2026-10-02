@@ -5,34 +5,26 @@ services:
       dockerfile: Dockerfile
       args:
         ROS_DISTRO: humble
-  # image: tedwang2/tdk-slam-ws:0.0
-    image: tdk_slam:simu
+        # match the host user so files created in the container are owned by you
+        USER_UID: ${HOST_UID:-1000}
+        USER_GID: ${HOST_GID:-1000}
+    image: tdk_slam:humble
     container_name: tdk_slam
     stdin_open: true
     tty: true
     privileged: true
     stop_grace_period: 3s
     network_mode: host
+    ipc: host
     working_dir: /home/tdk/tdk_slam_ws
     environment:
-      #- DISPLAY=host.docker.internal:0.0 #on windows
-      - DISPLAY=${DISPLAY} #on linux
-      - XAUTHORITY=/root/.Xauthority
-      - ROS_WS=/home/tdk/tdk_slam_ws
-      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-      - ROS_DOMAIN_ID=30
+      - DISPLAY=${DISPLAY:-:0}
       - QT_X11_NO_MITSHM=1 # Fix for Qt applications in Docker
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-30}
     volumes:
-      - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
-      # Mount X11 server
-      - /d/.Xauthority:/root/.Xauthority
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw # X11 (run `xhost +local:docker` on host)
       - /dev:/dev
       - ../:/home/tdk/tdk_slam_ws
-    devices:
-      - /dev:/dev
-    ports:
-      - "8765:8765" # for foxglove
-
     command: /bin/bash

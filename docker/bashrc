@@ -1,0 +1,15 @@
+
+# ---- tdk_slam_ws ----
+source /opt/ros/${ROS_DISTRO:-humble}/setup.bash
+export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-30}
+export RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+export QT_X11_NO_MITSHM=1
+
+if [ -f "${ROS_WS}/install/setup.bash" ]; then
+  source "${ROS_WS}/install/setup.bash"
+fi
+
+alias cb='cd ${ROS_WS} && colcon build --symlink-install && source install/setup.bash'
+alias sw='source ${ROS_WS}/install/setup.bash'
+
+PS1='\[\033[01;32m\]\u@tdk_slam\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '

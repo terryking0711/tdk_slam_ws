@@ -3,7 +3,7 @@ import xacro
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction, LogInfo, OpaqueFunction
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.substitutions import FindPackageShare
@@ -19,22 +19,30 @@ from launch.conditions import IfCondition
 #
 # world(0,0)   = 真實比賽場地最左下角
 # map(0,0)     = 建圖原點（= 比賽出發點）
-# world -> map = 平移 (0.425, 1.0)，無旋轉
+# world -> map = /workspaces/field_config.yaml 的 sides.<field_side>.world_to_map
+#
+# 比賽場地（地圖）用 field_side:=normal / mirror 選，
+# 地圖名稱、world->map 偏移都在 /workspaces/field_config.yaml（改完不用重 build）。
 # ============================================================================
 
-WORLD_TO_MAP_X = 0.425
-WORLD_TO_MAP_Y = 1.0
+FIELD_CONFIG_FILE = '/workspaces/field_config.yaml'
 
 
-def load_map_name(pkg_dir):
-    # 換地圖統一改 config/map_config.yaml 的 map_name
-    with open(os.path.join(pkg_dir, 'config', 'map_config.yaml')) as f:
-        return yaml.safe_load(f)['map_name']
+def load_field_side(context):
+    with open(FIELD_CONFIG_FILE) as f:
+        field_config = yaml.safe_load(f)
+    field_side = LaunchConfiguration('field_side').perform(context) or field_config['default_side']
+    if field_side not in field_config['sides']:
+        raise RuntimeError(
+            f"field_side '{field_side}' not in {FIELD_CONFIG_FILE} sides {list(field_config['sides'])}")
+    return field_side, field_config['sides'][field_side], field_config['maps_dir']
 
 
-def generate_launch_description():
+def launch_setup(context):
     localization_pkg = get_package_share_directory('tdk_slam_manager')
-    map_name = load_map_name(localization_pkg)
+    field_side, side, maps_dir = load_field_side(context)
+    map_name = side['map_name']
+    world_to_map = side['world_to_map']
     sllidar_pkg = get_package_share_directory('rplidar_ros')
     use_sim_time = LaunchConfiguration('use_sim_time', default='false')
     localization_mode = LaunchConfiguration('localization_mode', default='mapping')
@@ -51,10 +59,10 @@ def generate_launch_description():
         name='world_to_map_static_publisher',
         output='screen',
         arguments=[
-            '--x', str(WORLD_TO_MAP_X),
-            '--y', str(WORLD_TO_MAP_Y),
+            '--x', str(world_to_map['x']),
+            '--y', str(world_to_map['y']),
             '--z', '0.0',
-            '--yaw', '0.0',
+            '--yaw', str(world_to_map['yaw']),
             '--frame-id', 'world',
             '--child-frame-id', 'map'
         ]
@@ -226,14 +234,14 @@ def generate_launch_description():
         arguments=[
             '-configuration_directory', os.path.join(localization_pkg, 'cartographer_config'),
             '-configuration_basename', 'localization.lua',
-            '-load_state_filename', os.path.join(localization_pkg, 'maps', map_name + '.pbstream')
+            '-load_state_filename', os.path.join(maps_dir, map_name + '.pbstream')
         ],
         remappings=[
             ('odom', '/odom')
         ]
     )
 
-    map_yaml_file = os.path.join(localization_pkg, 'maps', map_name + '.yaml')
+    map_yaml_file = os.path.join(maps_dir, map_name + '.yaml')
 
     # map_server
     map_server_node = Node(
@@ -298,8 +306,8 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'slam_type': localization_mode,
-            'world_to_map_x': WORLD_TO_MAP_X,
-            'world_to_map_y': WORLD_TO_MAP_Y,
+            'world_to_map_x': float(world_to_map['x']),
+            'world_to_map_y': float(world_to_map['y']),
             'carto_config_dir': os.path.join(localization_pkg, 'cartographer_config'),
             'carto_config_basename': 'localization.lua',
             'tolerance_dist': 0.15,
@@ -309,10 +317,9 @@ def generate_launch_description():
         }]
     )
 
-    return LaunchDescription([
-        DeclareLaunchArgument('use_sim_time', default_value='false'),
-        DeclareLaunchArgument('localization_mode', default_value='mapping'),
-
+    return [
+        LogInfo(msg=f'[spawn_launch] field_side = {field_side}, map = {map_name}, '
+                    f'world_to_map = {world_to_map}'),
         world_tf_pub,
         robot_state_publisher,
         odom_tf_broadcaster_node,
@@ -334,5 +341,16 @@ def generate_launch_description():
 
         robot_pose_publisher_node,
         localization_manager_node
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
+        DeclareLaunchArgument('localization_mode', default_value='mapping'),
+        DeclareLaunchArgument(
+            'field_side', default_value='',
+            description='normal / mirror（空白 = field_config.yaml 的 default_side）'),
+        OpaqueFunction(function=launch_setup),
     ])
     
