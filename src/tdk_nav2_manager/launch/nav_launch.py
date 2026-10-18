@@ -1,4 +1,6 @@
 import os
+import math
+import tempfile
 
 import yaml
 
@@ -12,7 +14,9 @@ from launch.actions import (
     LogInfo,
     OpaqueFunction,
     SetLaunchConfiguration,
+    RegisterEventHandler,
 )
+from launch.event_handlers import OnShutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, SetRemap
@@ -21,22 +25,58 @@ from launch_ros.actions import Node, SetRemap
 FIELD_CONFIG_FILE = '/workspaces/field_config.yaml'
 
 
+def mirror_spin_parameters(params, scale):
+    """Raise both spin and smoother limits; preserve all translational settings."""
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError('mirror_spin_speed_scale must be finite and positive')
+    behavior = params['behavior_server']['ros__parameters']
+    for key in ('max_rotational_vel', 'min_rotational_vel', 'rotational_acc_lim'):
+        behavior[key] *= scale
+    smoother = params['velocity_smoother']['ros__parameters']
+    smoother['max_velocity'][2] = max(
+        smoother['max_velocity'][2], behavior['max_rotational_vel'])
+    smoother['min_velocity'][2] = min(
+        smoother['min_velocity'][2], -behavior['max_rotational_vel'])
+    smoother['max_accel'][2] *= scale
+    smoother['max_decel'][2] *= scale
+    return params
+
+
 def resolve_map(context):
-    # map:=<yaml> 有給就直接用；沒給就依 field_side 從 field_config.yaml 選地圖
-    if LaunchConfiguration('map').perform(context):
-        return []
     with open(FIELD_CONFIG_FILE) as f:
         field_config = yaml.safe_load(f)
     field_side = LaunchConfiguration('field_side').perform(context) or field_config['default_side']
     if field_side not in field_config['sides']:
         raise RuntimeError(
-            f"field_side '{field_side}' not in {FIELD_CONFIG_FILE} sides {list(field_config['sides'])}")
-    map_yaml = os.path.join(
-        field_config['maps_dir'], field_config['sides'][field_side]['map_name'] + '.yaml')
-    return [
-        LogInfo(msg=f'[nav_launch] field_side = {field_side}, map = {map_yaml}'),
-        SetLaunchConfiguration('map', map_yaml),
-    ]
+            f"field_side '{field_side}' not in {FIELD_CONFIG_FILE} sides "
+            f"{list(field_config['sides'])}")
+    actions = []
+    if not LaunchConfiguration('map').perform(context):
+        map_yaml = os.path.join(
+            field_config['maps_dir'], field_config['sides'][field_side]['map_name'] + '.yaml')
+        actions += [LogInfo(msg=f'[nav_launch] field_side = {field_side}, map = {map_yaml}'),
+                    SetLaunchConfiguration('map', map_yaml)]
+    if field_side in ('mirror', 'dit'):
+        with open(field_config['sides'][field_side]['fsm_side_file']) as f:
+            settings = yaml.safe_load(f)
+        scale = float(settings.get('mirror_spin_speed_scale', 1.0))
+        with open(LaunchConfiguration('nav_params_file').perform(context)) as f:
+            params = mirror_spin_parameters(yaml.safe_load(f), scale)
+        with tempfile.NamedTemporaryFile(
+                mode='w', prefix='tdk_mirror_nav2_', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(params, f)
+            generated_file = f.name
+        def cleanup(_context):
+            if os.path.exists(generated_file):
+                os.unlink(generated_file)
+            return []
+        actions += [
+            SetLaunchConfiguration('nav_params_file', generated_file),
+            LogInfo(msg=f'[nav_launch] {field_side} uses mirror spin scale={scale}; '
+                        f"max angular velocity={params['behavior_server']['ros__parameters']['max_rotational_vel']} rad/s"),
+            RegisterEventHandler(OnShutdown(on_shutdown=[OpaqueFunction(function=cleanup)])),
+        ]
+    return actions
 
 
 def generate_launch_description():
@@ -83,7 +123,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             'use_sim_time': use_sim_time,
-            'params_file': params_file,
+            'params_file': LaunchConfiguration('nav_params_file'),
             'autostart': 'true'
         }.items()
     )
@@ -113,6 +153,7 @@ def generate_launch_description():
             default_value='',
             description='Full path to map yaml（空白 = 依 field_side 從 field_config.yaml 選）'
         ),
+        DeclareLaunchArgument('nav_params_file', default_value=params_file),
         OpaqueFunction(function=resolve_map),
         map_server_node,
         lifecycle_manager_map,

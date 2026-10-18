@@ -81,7 +81,7 @@ controller_server:
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.03           # 6 cm,精準停靠(依你要求維持)
+      xy_goal_tolerance: 0.04           # 6 cm,精準停靠(依你要求維持)
       yaw_goal_tolerance: 0.03          # ~2.9°
       stateful: True                    # xy 達標後只檢查 yaw,防止來回追 xy
 
@@ -92,8 +92,8 @@ controller_server:
       time_steps: 32                    # 32 * 0.1 = 3.2 s 預測視野
       model_dt: 0.1                     # ★改 0.05→0.1:必須 = 1 / controller_frequency(現為10Hz)，否則 MPPI configure() 會丟例外導致 controller_server FATAL 崩潰
       batch_size: 1000
-      vx_std: 0.40
-      vy_std: 0.40
+      vx_std: 0.50                      # ★改 0.40→0.50:取樣涵蓋到 0.6~0.8 的高速區
+      vy_std: 0.50
       wz_std: 0.30                      # ★改 0.60→0.30:麥輪路途中不需要大角度取樣,減少亂轉的候選軌跡
 
       # --- 速度上限（已調高至 1.0）---
@@ -104,18 +104,20 @@ controller_server:
       wz_max:  0.60
 
       # --- 加速度上限：根據 1.1 ~ 1.2 秒內煞停的物理特性調高 ---
-      ax_max: 0.4                       # 原 0.6 -> 提高到 0.9，確保極速 1.0 可以在 1.1 秒內煞停
-      ax_min: -0.4
-      ay_max: 0.3                       # 麥輪橫移需要足夠的爆發力克服摩擦力
-      ay_min: -0.3
+      ax_max: 0.6                       # ★改 0.4→0.6:0.4 要 2 s / 0.8 m 才加到 0.8,短距離根本衝不到高速
+      ax_min: -0.6
+      ay_max: 0.5                       # ★改 0.3→0.5
+      ay_min: -0.5
       az_max: 0.6                       # 旋轉加速度保持 1.0，反應較靈敏
 
-      temperature: 0.4
+      temperature: 0.3                  # ★改 0.4→0.3:降低對慢速軌跡的平均化,輸出速度不會被拉低
       gamma: 0.015
 
       # ★微調：由於最高速提升，前瞻視野距離變大 (0.195 * 2.0s = 0.39m)
       # 將 prune_distance 從 0.4 稍微放寬至 0.5m，留給 MPPI 裁剪歷史路徑時更多餘裕
-      prune_distance: 0.6
+      # ★改 0.6→2.0:原本只看前方 0.6m 路徑,但 3.2s*0.8m/s≈2.6m,快的軌跡會衝出路徑末端被
+      #   PathFollow/PathAlign 懲罰 → MPPI 只敢選 0.3~0.4 m/s。這是慢的主因。
+      prune_distance: 2.0
       transform_tolerance: 0.3
       visualize: false
 
@@ -183,8 +185,8 @@ controller_server:
       PathFollowCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
-        offset_from_furthest: 5
+        cost_weight: 8.0                # ★改 5→8:加強「沿路徑往前推進」的獎勵
+        offset_from_furthest: 6         # ★改 5→6
         threshold_to_consider: 1.0
 
       PathAngleCritic:
@@ -282,8 +284,8 @@ local_costmap:
       rolling_window: true
 
       # ★改 4x4→3x3:MPPI 視野縮短(~0.26m)+prune 0.4m,3m 視窗綽綽有餘,省 CPU
-      width: 3
-      height: 3
+      width: 5                          # ★改 3→5:配合 prune_distance 2.0,路徑要在 local costmap 內才會被用到
+      height: 5
       resolution: 0.05
 
       # 45cm x 45cm 方形車體。前提:base_footprint 在車體幾何中心。
@@ -308,7 +310,11 @@ local_costmap:
           raytrace_max_range: 2.5       # ★改 3.0→2.5:視窗縮小後不需 raytrace 那麼遠
           raytrace_min_range: 0.0
           obstacle_max_range: 2.0       # ★改 2.5→2.0:同上,減少每幀處理的點數
-          obstacle_min_range: 0.0
+          # 0.0→0.35:光滑牆面的反射會在車身周圍產生假點,導致錯誤避障。
+          #   /scan 由 laser_merger 轉到 base_footprint(車體中心),距離從中心算;
+          #   0.35 > 車體外接半徑 0.318,車身範圍內的點一律不標記。
+          #   只影響 Nav2 costmap,Cartographer 定位仍吃完整 /scan。
+          obstacle_min_range: 0.53
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
@@ -400,8 +406,8 @@ velocity_smoother:
 # [X, Y, Theta] ★改:與 MPPI 新上限完全對齊。麥輪務必保留 Y!
     max_velocity: [0.80, 0.80, 0.6]   # X, Y 調高至 0.80，Theta 降至 0.6
     min_velocity: [-0.80, -0.80, -0.6]
-    max_accel: [0.4, 0.3, 0.6]        # ★ 加速度同步調高至 0.9，確保高速時煞得住
-    max_decel: [-0.4, -0.3, -0.6]      # 減速度與加速度對齊
+    max_accel: [0.6, 0.5, 0.6]        # ★改:與 MPPI ax/ay 對齊
+    max_decel: [-0.6, -0.5, -0.6]      # 減速度與加速度對齊
 
     odom_topic: /odom
     odom_duration: 0.1
