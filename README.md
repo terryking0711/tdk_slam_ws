@@ -1,461 +1,448 @@
-# TDK 30th — tdk_slam_ws（定位與導航）
+# TDK 30th — Robot FSM
 
-TDK 第 30 屆機器人競賽的**定位 + 導航** workspace。負責雙 LiDAR 前處理、Cartographer 定位、TF 樹與 Nav2 導航，並提供「場地座標（world frame）」的機器人位置給主程式使用。
+TDK 30 屆競賽機器人的任務主程式，以 **ROS 2 Humble、C++ 與非阻塞有限狀態機（FSM）** 協調定位導航、視覺辨識及 STM32 機構控制，完成關卡移動、稻草收集與放置。
 
-本 ws 是整台機器人軟體的其中一塊，搭配以下 workspace 一起運作：
-
-| Workspace | 負責 |
-|-----------|------|
-| **tdk_slam_ws**（本 repo） | 感測器前處理、定位、TF、Nav2 |
-| [`robot_fsm_v2_ws`](https://github.com/terryking0711/robot_fsm_v2_ws) | 比賽任務 FSM、named pose 導航、DirectTransition 控速、robot_panel 後端 |
-| `microros_ws` | STM32 micro-ROS agent（底盤 / 機構），以及 rosbridge、foxglove_bridge 等常駐 bridge |
-| `robot_panel_ui` | 瀏覽器控制面板（狀態監控、一鍵啟動比賽） |
-
-- 分支：`tmep_ver`
-- 環境：Ubuntu 22.04 / ROS 2 Humble / Docker，CycloneDDS，`ROS_DOMAIN_ID=30`
-- 底盤：麥克納姆輪（全向），RPLiDAR S3 ×2（前 / 後）
-
----
+本專案保留作為個人作品與後續開發參考。設計重點是把 **「任務順序」「移動控制」「機構與感知回授」** 分開管理，再由 FSM 決定何時執行、等待、切換或停車。以下以實機使用的第二、三關流程為主，其他 workspace 僅介紹與 FSM 的整合關係。
 
 ## 目錄
 
-- [系統架構](#系統架構)
-- [Docker 快速開始](#docker-快速開始)
-- [啟動方式](#啟動方式)
-- [場地與地圖設定（field_side）](#場地與地圖設定field_side)
-- [TF Tree](#tf-tree)
-- [初始定位流程](#初始定位流程)
-- [套件與節點](#套件與節點)
-- [Nav2 設定](#nav2-設定)
-- [進度與已知問題](#進度與已知問題)
+1. [系統架構](#1-系統架構)
+2. [套件與通訊](#2-套件與通訊)
+3. [移動控制](#3-移動控制)
+4. [開發與視覺化工具](#4-開發與視覺化工具)
+5. [快速啟動與面板](#5-快速啟動與面板)
+6. [FSM 實作細節](#6-fsm-實作細節)
+7. [介面一覽](#7-介面一覽)
 
 ---
 
-## 系統架構
-
-### 整體資料流
-
-```mermaid
-flowchart LR
-    %% ========== 操作介面 ==========
-    subgraph UI ["🖥️ 操作介面（瀏覽器）"]
-        direction TB
-        Panel["<b>robot_panel_ui</b><br>START NORMAL / MIRROR / DIT<br>STOP · RESET STAGE 2/3"]
-        Fox["<b>Foxglove / Lichtblick</b><br>地圖 · TF · named_poses"]
-    end
-
-    %% ========== 常駐 bridge container ==========
-    subgraph BR ["🔌 常駐 container（microros_ws/docker）"]
-        direction TB
-        RB["rosbridge_websocket<br>:9090"]
-        FB["foxglove_bridge<br>:8767"]
-        AgF["micro-ROS agent fast<br>/dev/stm32_fast · 1M baud"]
-        AgS["micro-ROS agent slow<br>/dev/stm32_slow · 115200"]
-    end
-
-    %% ========== 硬體 ==========
-    subgraph HW ["🔧 硬體"]
-        direction TB
-        STMF["STM32 底盤<br>mecanum 控制 + 里程計"]
-        STMS["STM32 機構"]
-        LF["RPLiDAR S3<br>front"]
-        LR["RPLiDAR S3<br>rear"]
-    end
-
-    %% ========== tdk_slam_ws：定位 ==========
-    subgraph SLAM ["📍 tdk_slam_ws · tdk_slam_manager（spawn_launch.py）"]
-        direction TB
-        FF["filter_front"]
-        FR["filter_rear"]
-        MG["laser_merger<br>融合成 360° /scan"]
-        OTF["odom_tf_broadcaster<br>odom → base_footprint"]
-        CARTO["cartographer_node<br>pure localization<br>map → odom"]
-        RPP["robot_pose_publisher<br>/robot_pose（world）"]
-        LM["localization_manager<br>初始定位 / 驗證"]
-        WTF["static TF<br>world → map"]
-    end
-
-    %% ========== tdk_slam_ws：導航 ==========
-    subgraph NAV ["🧭 tdk_slam_ws · tdk_nav2_manager（nav_launch.py）"]
-        direction TB
-        MS["map_server<br>/map"]
-        PL["planner_server<br>Smac2D"]
-        CT["controller_server<br>MPPI（Omni）"]
-        BH["behavior_server<br>spin / backup"]
-        VS["velocity_smoother"]
-    end
-
-    %% ========== robot_fsm_v2_ws ==========
-    subgraph FSM ["🤖 robot_fsm_v2_ws"]
-        direction TB
-        FL["fsm_launcher<br>（robot_panel_bridge）"]
-        MC["robot_fsm_main<br>MissionController"]
-        DT["DirectTransition<br>依 /robot_pose 直接控速"]
-        NS["navigation_server<br>named pose → Nav2"]
-    end
-
-    CFG[("field_config.yaml<br>normal / mirror / dit")]
-    MAPS[("maps/<br>map_normal · map_mirror<br>real_map_0 (DIT)")]
-
-    %% ---- UI ----
-    Panel <-->|WebSocket| RB
-    Fox <-->|WebSocket| FB
-    RB -->|"srv: start / stop / reset"| FL
-    FL -->|"ros2 launch robot_bringup<br>field_side:=…"| MC
-
-    %% ---- 感測器 ----
-    STMF <--> AgF
-    STMS <--> AgS
-    LF -->|/front/scan| FF --> MG
-    LR -->|/rear/scan| FR --> MG
-    AgF -->|/odom| OTF
-    AgF -->|/odom| CARTO
-    MG -->|/scan| CARTO
-
-    %% ---- 地圖 / 場地 ----
-    CFG -.->|選地圖| MAPS
-    CFG -.->|world_to_map| WTF
-    MAPS -->|.pbstream| CARTO
-    MAPS -->|.yaml + .pgm| MS
-
-    %% ---- 定位 ----
-    CARTO -.->|TF| RPP
-    WTF -.->|TF| RPP
-    RPP -->|/robot_pose| LM
-    RPP -->|/robot_pose| DT
-    MC -->|/init_pose_cmd| LM
-    LM -->|/init_pose_status| MC
-    LM -->|"srv: finish / start_trajectory"| CARTO
-    LM -->|"srv: clear costmap"| CT
-
-    %% ---- 導航 ----
-    MS -->|/map| PL
-    MC --> DT
-    MC -->|"action: navigate_to_named_pose"| NS
-    NS -->|"action: navigate_to_pose"| PL
-    PL -->|path| CT
-    CT -->|/cmd_vel_nav| VS
-    BH -->|/cmd_vel_nav| VS
-    NS -->|"/cmd_vel_nav（終點微調）"| VS
-
-    %% ---- 速度輸出 ----
-    VS -->|/cmd_vel| AgF
-    DT -->|/cmd_vel| AgF
-    MC <-->|"機構指令 / 回授"| AgS
-
-    classDef ui fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1
-    classDef hw fill:#fff3e0,stroke:#fb8c00,color:#e65100
-    classDef slam fill:#e8f5e9,stroke:#43a047,color:#1b5e20
-    classDef nav fill:#f3e5f5,stroke:#8e24aa,color:#4a148c
-    classDef fsm fill:#fce4ec,stroke:#d81b60,color:#880e4f
-    classDef data fill:#fffde7,stroke:#fbc02d,color:#5d4037
-    class Panel,Fox,RB,FB ui
-    class STMF,STMS,LF,LR,AgF,AgS hw
-    class FF,FR,MG,OTF,CARTO,RPP,LM,WTF slam
-    class MS,PL,CT,BH,VS nav
-    class FL,MC,DT,NS fsm
-    class CFG,MAPS data
-```
-
-### 速度命令路徑
-
-底盤只吃一個 `/cmd_vel`，但有兩種來源，由 FSM 依任務階段決定由誰控制：
-
-```mermaid
-flowchart LR
-    subgraph Nav2Path ["Nav2 導航（長距離、需避障）"]
-        CT["MPPI controller"] -->|/cmd_vel_nav| VS
-        BH["behavior_server<br>spin / backup"] -->|/cmd_vel_nav| VS
-        NS["navigation_server<br>終點微調"] -->|/cmd_vel_nav| VS
-        VS["velocity_smoother"]
-    end
-
-    subgraph DirectPath ["DirectTransition 控速（短距離、高精度）"]
-        RP[/"/robot_pose<br>world frame"/] --> DT["DirectTransition<br>加減速 ramp + 容差判定"]
-    end
-
-    VS -->|/cmd_vel| STM["STM32 底盤<br>（micro-ROS fast）"]
-    DT -->|/cmd_vel| STM
-```
-
-- **Nav2**：所有 Nav2 內部速度（controller、behavior 的 spin/backup）都先 remap 到 `/cmd_vel_nav`，再經 `velocity_smoother` 輸出 `/cmd_vel`。這樣 `/cmd_vel` 只會有一個 Nav2 的 publisher，不會被 recovery 行為繞過 smoother。
-- **DirectTransition**（在 `robot_fsm_v2_ws`）：入口對位、轉角、放置點這類「路線固定、要求 cm 級精度」的段落，不走 Nav2，直接依 `/robot_pose` 計算速度。每個目標點的 `max_speed`、`max_accel` / `max_decel`、`xy_tolerance`、`yaw_tolerance_deg`、`settle_cycles` 都寫在 `fsm_side_<side>.yaml`，改完重啟 FSM 就生效。
-
----
-
-## Docker 快速開始
-
-每個 workspace 都有自己的 `docker/`，可以單獨 build 與執行。本 ws 的 image 已裝好所有相依套件。`src/` 內的第三方套件（`ira_laser_tools`、`rplidar_ros`、`nav2_smac_planner`）都直接放在 repo 中，不需要 submodule。
-
-```bash
-# 1. clone（實機使用 tmep_ver 分支）
-git clone -b tmep_ver https://github.com/terryking0711/tdk_slam_ws.git
-cd tdk_slam_ws/docker
-
-# 2. build image + 啟動 container（第一次約 10~20 分鐘）
-./docker_run.sh             # 會自動帶入主機 UID/GID 並開放 X11
-
-# 3. 進入 container
-docker exec -it tdk_slam bash
-
-# 4. 在 container 內 build（工作目錄就是 ~/tdk_slam_ws）
-colcon build --symlink-install
-source install/setup.bash
-```
-
-| 項目 | 說明 |
-|------|------|
-| 快捷指令 | `cb` = build + source，`sw` = source `install/setup.bash` |
-| 自動 source | 新開 `docker exec -it tdk_slam bash` 會自動 source `install/setup.bash` |
-| GUI（rviz2） | 主機需 `xhost +local:docker`（`docker_run.sh` 已包含） |
-| UID 不是 1000 | 請用 `./docker_run.sh`，否則 `build/ install/ log/` 的擁有者會錯 |
-| 環境變數 | `ROS_DOMAIN_ID`（預設 30）、`RMW_IMPLEMENTATION`（預設 cyclonedds）可覆蓋 |
-| 改 Dockerfile 後 | `docker compose up -d --build`；關閉：`docker compose down` |
-
-> ⚠ `spawn_launch.py` 與 `nav_launch.py` 會讀 `/workspaces/field_config.yaml`（見[場地與地圖設定](#場地與地圖設定field_side)），container 內必須能存取到這個路徑。
-
-### LiDAR 裝置
-
-前後 LiDAR 用 udev symlink 固定裝置名稱，避免插拔後 `/dev/ttyUSB*` 順序對調：
-
-| 裝置 | 路徑 | namespace / frame |
-|------|------|-------------------|
-| 前 LiDAR | `/dev/rplidar_front` | `/front` · `laser_front` |
-| 後 LiDAR | `/dev/rplidar_rear` | `/rear` · `laser_rear` |
-
----
-
-## 啟動方式
-
-### 前置：micro-ROS 與 bridge
-
-STM32 的 micro-ROS agent（fast / slow 兩條 serial）和 rosbridge、foxglove_bridge 等常駐服務，跑在 `microros_ws/docker` 的獨立 container 裡。它們不必跟著定位 / 導航一起重啟，所以要先啟動。
-
-### 方式一：一鍵啟動（比賽用）
-
-桌面 icon 會在 tmux 裡同時開好定位、導航、`fsm_launcher` 與 named_poses 標記：
-
-| 桌面 icon | 等同指令 | 用途 |
-|-----------|----------|------|
-| `TDK Loc_Normal` | `start.sh normal` | 比賽 Normal 場地 |
-| `TDK Loc_Mirror` | `start.sh mirror` | 比賽 Mirror 場地 |
-| `TDK Loc_DIT` | `start.sh dit` | 實驗室測試場地 |
-| `TDK Mapping+Nav` | `start_mapping.sh` | Cartographer 建圖 + Nav2 |
-
-前置的 micro-ROS / bridge 對應桌面 icon `TDK MicroROS`（按一次啟動、再按一次關閉）。
-
-接著用 `TDK Robot Panel` 打開 `robot_panel_ui`，確認各項狀態燈正常後，按下與已載入地圖**相同 side** 的 `START`。`fsm_launcher` 會擋下 side 不一致的啟動請求。
-
-再按一次同一個 icon（或換另一個 side）時，會先對所有 pane 送 Ctrl-C 正常關閉，再重新啟動。換場地也是用這個方式。
-
-### 方式二：手動啟動
-
-```bash
-# Terminal 1 — LiDAR + 前處理 + TF + 定位
-ros2 launch tdk_slam_manager spawn_launch.py localization_mode:=cartographer field_side:=normal
-
-# Terminal 2 — map_server + Nav2
-ros2 launch tdk_nav2_manager nav_launch.py field_side:=normal
-
-# Terminal 3 — 主程式（於 robot_fsm_v2_ws）
-ros2 launch robot_fsm robot_bringup.launch.py field_side:=normal
-```
-
-### Launch 參數
-
-**`spawn_launch.py`**
-
-| 參數 | 預設 | 說明 |
-|------|------|------|
-| `localization_mode` | `mapping` | 見下表 |
-| `field_side` | 空（= `default_side`） | `normal` / `mirror` / `dit`，決定 pbstream 與 world→map |
-| `use_sim_time` | `false` | |
-
-| `localization_mode` | 用途 | 狀態 |
-|---------------------|------|------|
-| `cartographer` | **比賽主定位**：pure localization 讀 pbstream | ✅ 比賽使用 |
-| `carto_mapping` | Cartographer 建圖（`/carto_map` 視覺化） | ✅ 可用 |
-| `mapping` | slam_toolbox 建圖 | ✅ 可用 |
-| `slam_toolbox` | slam_toolbox 定位 | ⚠ 尚未測試 |
-| `amcl` | AMCL 定位（備援） | ⚠ 尚未測試 |
-
-**`nav_launch.py`**
-
-| 參數 | 預設 | 說明 |
-|------|------|------|
-| `field_side` | 空（= `default_side`） | 決定 map_server 地圖與 spin 速度倍率 |
-| `map` | 空 | 指定地圖 yaml 完整路徑；留空則依 `field_side` 自動選 |
-| `nav_params_file` | `config/tdk_nav2_params.yaml` | Nav2 參數檔 |
-| `use_sim_time` | `false` | |
-
----
-
-## 場地與地圖設定（field_side）
-
-比賽場地分 **Normal / Mirror** 兩側，另有實驗室的 **DIT** 測試場地。所有跟場地有關的設定都集中在 `/workspaces/field_config.yaml`，定位、導航、FSM 三邊讀的是同一份，所以選 side 時只要指定一次：
+## 1. 系統架構
 
 ```mermaid
 flowchart TB
-    Pick{{"選擇場地<br>field_side = normal / mirror / dit"}}
-    CFG[("field_config.yaml<br>sides.SIDE")]
-    Pick --> CFG
+    UI["robot_panel_ui<br/>網頁控制面板"]
+    SLAM["tdk_slam_ws<br/>定位、TF、Nav2"]
+    VISION["TDK-straw<br/>稻草辨識"]
 
-    CFG -->|map_name| A["spawn_launch.py<br>cartographer 載入 map_name.pbstream"]
-    CFG -->|world_to_map| B["spawn_launch.py<br>world → map 靜態 TF<br>localization_manager 座標轉換"]
-    CFG -->|map_name| C["nav_launch.py<br>map_server 載入 map_name.yaml"]
-    CFG -->|"fsm_side_file<br>mirror_spin_speed_scale"| D["nav_launch.py<br>產生暫存 Nav2 參數<br>放大 spin 角速度 / 加速度"]
-    CFG -->|"named_poses_file<br>fsm_side_file"| E["robot_fsm_v2_ws<br>導航點位 · 鏡像指令代號 · 控速參數"]
+    subgraph WS["robot_fsm_v2_ws（本 repo）"]
+        BRIDGE["robot_panel_bridge<br/>啟停、比賽倒數"]
+        FSM["robot_fsm<br/>任務決策 FSM"]
+        MOVE["移動控制<br/>Nav2／DirectTransition"]
+    end
+
+    STM["STM32 韌體<br/>底盤、機構"]
+
+    UI -->|rosbridge| BRIDGE
+    BRIDGE -->|START／STOP／RESET| FSM
+    SLAM -->|/robot_pose| FSM
+    VISION -->|/straw/target| FSM
+    FSM -->|移動目標| MOVE
+    MOVE -->|速度命令| STM
+    FSM -->|機構指令| STM
+
+    classDef ours fill:#dbeafe,stroke:#2563eb,color:#0f172a
+    classDef ext fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    classDef hw fill:#fef3c7,stroke:#d97706,color:#0f172a
+    class BRIDGE,FSM,MOVE ours
+    class UI,SLAM,VISION ext
+    class STM hw
+    style WS fill:none,stroke:#2563eb,stroke-dasharray:5 4
 ```
 
-| side | 地圖 | named_poses | FSM 設定 | 備註 |
-|------|------|-------------|----------|------|
-| `normal` | `map_normal` | `named_poses_normal.yaml` | `fsm_side_normal.yaml` | 比賽 Normal 場地 |
-| `mirror` | `map_mirror` | `named_poses_mirror.yaml` | `fsm_side_mirror.yaml` | 比賽 Mirror 場地 |
-| `dit` | `real_map_0` | `named_poses_dit.yaml` | `fsm_side_mirror.yaml` | 實驗室場地，控速沿用 mirror |
+> 藍色：本 repo　灰色：其他 repo　黃色：硬體。為了好讀，圖中省略回授路徑（`/odom`、夾取狀態、導航結果），細節見[移動控制](#3-移動控制)與[介面一覽](#7-介面一覽)。
 
-- `field_config.yaml` 裡的路徑都指向 `src/`，修改後下次 launch 就生效，**不需要重新 colcon build**。
-- mirror / dit 會讀 `fsm_side_*.yaml` 的 `mirror_spin_speed_scale`，同時放大 `behavior_server` 與 `velocity_smoother` 的角速度、角加速度限制，平移參數不變。產生的暫存參數檔在 launch 結束時自動刪除。
+- **FSM 是決策中心**：根據目前關卡、導航結果、定位、視覺與機構狀態決定下一步。
+- **兩種移動方式**：Nav2 與直接控速用於不同移動段落，依任務狀態切換。
+- **面板與後端**：面板透過後端操作 FSM；底層定位、感測器與 micro-ROS 由配套系統啟動。
+- **共用場地設定**：`field_config.yaml` 決定地圖、TF、點位與場地控制設定；Docker 與啟動腳本負責載入配套服務。
 
-### 建立新地圖
+### 跨 repo 關係
 
-1. 啟動建圖模式：`start_mapping.sh`，或 `spawn_launch.py localization_mode:=carto_mapping`
-2. 遙控機器人跑完整個場地
-3. 存檔（`.pbstream` 給 cartographer 定位，`.yaml/.pgm` 給 map_server）：
+| Repo／workspace | 與 FSM 的關係 |
+| --- | --- |
+| [tdk_slam_ws](https://github.com/terryking0711/tdk_slam_ws/tree/tmep_ver) | 提供 Cartographer 定位、TF、`/robot_pose`、定位初始化與 Nav2（Smac2D + MPPI Omni） |
+| `TDK-straw` | 使用 OpenCV 的 HSV 色彩與幾何分析偵測稻草，透過 `/straw/target` 提供第三關對準資訊 |
+| `microros_ws` | 提供 micro-ROS Agent 與相關容器服務，銜接 ROS 2 和 STM32；韌體負責實際底盤及機構執行 |
+| [robot_panel_ui](https://github.com/terryking0711/robot_panel_ui) | 透過 rosbridge 顯示狀態、呼叫 launcher services，不直接實作關卡邏輯 |
+| [tdk_robot_docker](https://github.com/terryking0711/tdk_robot_docker) | 統整 Docker、桌面啟動腳本、`field_config.yaml` 與跨 workspace 執行環境 |
+
+<!-- 在此加入 TDK-straw 辨識圖片／實機影片 -->
+
+---
+
+## 2. 套件與通訊
+
+### FSM 運作方式
+
+主程式以 **10 Hz tick** 推進狀態，每次只執行一小步；等待導航或機構時仍持續處理 ROS callbacks。
+
+| 元件 | 職責 |
+| --- | --- |
+| `RobotContext` | 保存最新回授與共用設定 |
+| `MissionController` | 管理整體流程 |
+| 第二、三關子 FSM | 管理關卡內動作 |
+
+### 套件分工
+
+| 套件 | 職責與主要技術 |
+| --- | --- |
+| `robot_fsm` | C++／rclcpp 非阻塞 FSM、機構指令、視覺與夾取回授、直接控速、速度橋接 |
+| `robot_navigation` | rclcpp_action 封裝 Nav2、named poses YAML、逾時與精對位、Python 點位視覺化工具 |
+| `robot_interfaces` | 自訂機構訊息、夾取狀態及 `NavigateToNamedPose.action`，定義模組間介面 |
+| `robot_panel_bridge` | Python／rclpy services、FSM 子程序管理、比賽倒數與主機電池監控 |
+| `straw_interfaces` | 本 workspace 內另附的稻草訊息套件，供 FSM 接收 TDK-straw 偵測結果 |
+
+### 通訊方式
+
+| 機制 | 用途 |
+| --- | --- |
+| **topics** | 位姿、視覺、速度與機構狀態 |
+| **actions** | 導航目標與結果 |
+| **services** | 啟停、重置與點位重載 |
+| **TF** | 統一場地、地圖、里程計與車體座標 |
+
+STM32 透過 micro-ROS 參與 ROS 通訊。
+
+---
+
+## 3. 移動控制
+
+### 從 Nav2 到閉迴路控速
+
+開發初期使用 Nav2 執行點位移動，但在本麥輪機器人與競賽場地上，移動表現不易調整到符合需求，調參成本高。後來針對固定點位與關卡移動實作 **`DirectTransition` 閉迴路控速**，在實機使用上更容易取得需要的移動表現。
+
+#### 使用 Nav2 的實機效果
+
+https://github.com/user-attachments/assets/20d47f27-70ef-4f53-84d4-dda88f34d5d7
+
+#### 使用控速的實際效果
+
+https://github.com/user-attachments/assets/02b318e7-a96c-47ff-a192-95f5787f165d
+
+### 兩條控制路徑
+
+```mermaid
+flowchart TB
+    FSM["FSM<br/>依段落選擇"]
+    LOC["tdk_slam_ws<br/>定位"]
+    NAV["Nav2 + smoother<br/>路徑規劃與追蹤"]
+    DT["DirectTransition<br/>閉迴路控速"]
+    OUT["/cmd_vel → STM32<br/>（經速度橋接）"]
+
+    FSM -->|需要路徑規劃| NAV
+    FSM -->|固定點位、轉角| DT
+    LOC -->|/robot_pose| DT
+    NAV --> OUT
+    DT --> OUT
+
+    classDef ours fill:#dbeafe,stroke:#2563eb,color:#0f172a
+    classDef ext fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    classDef hw fill:#fef3c7,stroke:#d97706,color:#0f172a
+    class FSM,DT ours
+    class NAV,LOC ext
+    class OUT hw
+```
+
+- **Nav2 路徑**：`navigation_server` 送出命名點位 action，Nav2 輸出 `/cmd_vel_nav`，經 `velocity_smoother` 成為 `/cmd_vel`。
+- **直接控速路徑**：`DirectTransition` 讀取 `/robot_pose`，直接發布 `/cmd_vel`。
+- **回到 FSM**：Nav2 回報成功／失敗／取消；直接控速回報到位／逾時／等待。
+- **速度輸出**：速度橋接以 20 Hz 送 `/mecanum/cmd_vel` 經 micro-ROS 到 STM32；STM32 回傳 `/odom` 給定位系統。
+- **切換保護**：直接控速前會等待導航結束及速度沉降，避免與 smoother 的剩餘輸出交錯。
+
+### 控制器運作
+
+- **誤差計算**：持續讀取 `/robot_pose`，計算 world 座標下的位置與朝向誤差。
+- **速度輸出**：轉換成車體速度送到 `/cmd_vel`。
+- **可調參數**：依目標設定速度上限、位置／角度容差、穩定週期與逾時策略；並可限制加減速、接近目標時減速。
+- **停止與銜接**：位姿過期時停車；標準速度橋接也會在輸入過期時送零。達成條件後由 FSM 接續機構或下一段移動。
+
+### 控制方式比較
+
+| 控制方式 | 在 FSM 中的用途 |
+| --- | --- |
+| Nav2 | 需要路徑規劃的導航段落，由 `navigation_server` 管理目標與結果 |
+| `DirectTransition` | 固定入口、轉角與放置點等段落，利用定位回授直接控制；mirror／DIT 多個段落採此方式 |
+| 關卡內控速 | 第三關掃排、換排與視覺對準，結合位姿、目標與機構回授決定速度及停車時機 |
+
+> [!NOTE]
+> 直接控速仍依賴定位品質與場地路徑安排，沒有 Nav2 同等的路徑規劃與動態避障功能。兩種方式由 FSM 依段落使用，這也是本專案從通用導航轉向任務導向控制的重要設計經驗。
+
+<!-- 在此加入 Nav2 與閉迴路控速的實機對比影片，可附場地與測試條件 -->
+
+---
+
+## 4. 開發與視覺化工具
+
+### 地圖、點位與移動疊圖
+
+`plot_named_poses.py` **不需要啟動 ROS**，讀取場地地圖、world/map 轉換、named poses 與部分 FSM 移動常數，輸出 PNG。
+
+依賴套件：PyYAML、Matplotlib、Pillow
 
 ```bash
-ros2 service call /finish_trajectory cartographer_ros_msgs/srv/FinishTrajectory "{trajectory_id: 0}"
-ros2 service call /write_state cartographer_ros_msgs/srv/WriteState \
-  "{filename: '<ws 絕對路徑>/src/tdk_slam_manager/maps/<name>.pbstream', include_unfinished_submaps: true}"
-ros2 run nav2_map_server map_saver_cli -f src/tdk_slam_manager/maps/<name> \
-  --ros-args -r map:=/carto_map -p map_subscribe_transient_local:=true
+cd /workspaces/robot_fsm_v2_ws
+
+# 產生所有場地疊圖
+python3 src/robot_navigation/scripts/plot_named_poses.py
+
+# 指定場地與輸出目錄
+python3 src/robot_navigation/scripts/plot_named_poses.py mirror dit -o /tmp/fsm_maps
+
+# 互動檢視；--full-map 可顯示整張地圖
+python3 src/robot_navigation/scripts/plot_named_poses.py mirror --show
 ```
 
-4. 在 `field_config.yaml` 把對應 side 的 `map_name` 改成 `<name>`
+#### mirror 場地的 named_pose 圖片
+![image](https://hackmd.io/_uploads/B1ZBA8M3Gx.png)
+
+#### normal 場地的 named_pose 圖片
+![image](https://hackmd.io/_uploads/Syz6RIG3Ge.png)
+
+> [!NOTE]
+> 圖中的定時移動是依控制常數估算的**名目軌跡**，掃排線為參考線，並非實機量測軌跡，也不保證涵蓋所有路線變體。適合檢查座標、朝向與動作方向，實際路徑仍需錄製定位資料驗證。
+
+<!-- 在此加入地圖＋座標點＋移動疊圖 -->
+
+### Foxglove／Lichtblick 即時開發
+
+| 工具 | 連線位址 |
+| --- | --- |
+| Foxglove WebSocket | `ws://<機器人IP>:8767` |
+| Lichtblick 網頁入口 | `http://<機器人IP>:8080` |
+
+在 Foxglove 或 Lichtblick 選擇 Foxglove WebSocket 連線即可；bridge 由配套 micro-ROS 容器堆疊啟動。
+
+#### 測試時的 Foxglove 畫面
+
+https://github.com/user-attachments/assets/51f5e700-f228-4988-a69a-81562ab84a24
+
+#### 3D panel 設定
+
+- Display frame 設為 `world`
+- 加入 `/map`、TF、`/robot_pose` 與 `/named_poses_markers`，即可對照地圖、機器人位置與目標點
+
+點位 markers 可手動啟動：
+
+```bash
+python3 /workspaces/robot_fsm_v2_ws/src/robot_navigation/scripts/named_poses_markers.py \
+  --ros-args -p field_side:=mirror
+```
+
+此工具偵測 YAML 存檔後會自動更新圖示；`/workspaces/start.sh` 已包含它，整合啟動時不必重複執行。
+
+> [!IMPORTANT]
+> **圖示更新不等於導航點位已重載**，需另外呼叫 `navigation_server` 的 `/reload_named_poses`。
+
+<!-- 在此加入 Foxglove／Lichtblick 開發畫面 -->
 
 ---
 
-## TF Tree
+## 5. 快速啟動與面板
+
+### 環境需求
+
+- 以既有 Docker 掛載路徑 `/workspaces` 為例
+- 需要相關 workspace、地圖、場地設定與硬體環境
+- 系統使用 `ROS_DOMAIN_ID=30`
+
+### 建置
+
+```bash
+# ROS 容器內
+cd /workspaces/robot_fsm_v2_ws
+./build_fsm.sh
+source ./use_fsm.sh
+```
+
+> [!WARNING]
+> `build_fsm.sh` 會清除本 workspace 的 `build/`、`install/`、`log/`。
+
+### 整合啟動（比賽使用）
+
+1. 啟動 `TDK MicroROS` 與視覺。
+2. 啟動 `TDK Loc_Normal`／`TDK Loc_Mirror`／`TDK Loc_DIT`：帶起定位、Nav2、launcher 與點位 markers。
+3. 開啟 robot_panel，按對應的 START：啟動 FSM 及 navigation_server。
+
+### 面板操作與開發監控
 
 ```mermaid
-flowchart TD
-    world["<b>world</b><br>場地左下角為原點"]
-    map["<b>map</b><br>建圖原點 = 比賽出發點"]
-    odom["<b>odom</b><br>里程計座標系"]
-    base["<b>base_footprint</b><br>底盤投影中心"]
-    lf["laser_front"]
-    lr["laser_rear"]
+flowchart TB
+    UI["robot_panel_ui<br/>按鈕、燈號、倒數"]
+    RB["rosbridge<br/>:9090"]
+    L["fsm_launcher<br/>程序管理、倒數"]
+    F["robot_fsm<br/>+ navigation_server"]
+    ROS["ROS 狀態<br/>topics、節點"]
+    FB["foxglove_bridge<br/>:8767"]
+    V["Foxglove／Lichtblick"]
 
-    world -->|"static_transform_publisher<br>field_config.yaml 的 world_to_map"| map
-    map -->|"cartographer pure localization<br>低頻全域校正（會跳動）"| odom
-    odom -->|"odom_tf_broadcaster（自寫）<br>轉發 /odom pose，使用上位機時間戳<br>※ 原規劃 EKF，暫時停用"| base
-    base -->|"robot_state_publisher（URDF）"| lf
-    base -->|"robot_state_publisher（URDF）"| lr
+    UI <-->|ROSLIB.js| RB
+    RB -->|/fsm/start_*、stop、reset| L
+    L -->|啟動／停止／重置| F
+    ROS -->|狀態、倒數| RB
+    ROS --> FB
+    FB -->|WebSocket| V
+
+    classDef ours fill:#dbeafe,stroke:#2563eb,color:#0f172a
+    classDef ext fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    class L,F ours
+    class UI,RB,ROS,FB,V ext
 ```
 
-- **world**：比賽規則、named_poses、FSM 都用場地座標。`/robot_pose` 就是 `world → base_footprint`。
-- **map**：Cartographer 的地圖座標。原點在建圖起點，所以每張地圖的 world→map 偏移要在 `field_config.yaml` 裡設好。
-- LiDAR 外參寫在 `config/robot_params.yaml`。前後 LiDAR 的 yaw 若有偏差，可在長直走廊靜止時執行 `scripts/calibrate_lidar_yaw.py` 估計修正量。
+- **START** 設定新的比賽期限；**STOP／RESET** 保留原倒數與路線選擇。
+- 燈號依訊息新鮮度及 topic／節點存在判斷；倒數來自 launcher 發布的 `/fsm/match_remaining`。
+- Foxglove／Lichtblick 供開發時檢查地圖、座標與即時資料。
+
+操作說明另見 [Robot Panel UI](https://github.com/terryking0711/robot_panel_ui)。
+
+### 直接 launch
+
+已有定位導航與通訊後端時，也可在容器內直接啟動：
+
+```bash
+export ROS_DOMAIN_ID=30
+source /workspaces/robot_fsm_v2_ws/use_fsm.sh
+ros2 launch robot_fsm robot_bringup.launch.py field_side:=mirror skip_stage2_arm:=true
+```
+
+> [!NOTE]
+> 直接 launch 不會建立面板 launcher 的比賽倒數；比賽計時與 RESET 操作請使用面板整合入口。
 
 ---
 
-## 初始定位流程
+## 6. FSM 實作細節
 
-比賽開始前，FSM 要求定位系統把機器人「放」到出發點，並確認定位正確後才開始任務：
+### 任務流程
 
 ```mermaid
-sequenceDiagram
-    participant FSM as robot_fsm_main
-    participant LM as localization_manager
-    participant C as cartographer_node
-    participant RP as robot_pose_publisher
-    participant N as Nav2 costmap
+flowchart TB
+    INIT["初始化／檢查"] --> WAIT["等待 START"]
+    WAIT --> S2["第二關<br/>推蛤蜊、返回"]
+    S2 --> MOVE["前往第三關入口"]
+    WAIT -.->|only_stage3<br/>skip_stage2| MOVE
+    MOVE --> S3["第三關<br/>跨越、掃排、夾取"]
+    S3 --> PLACE["放置<br/>approach→place"]
+    PLACE --> DONE["任務結束"]
 
-    FSM->>LM: /init_pose_cmd（world frame）
-    Note over LM: world → map 座標轉換<br>（減去 world_to_map）
-    LM->>C: srv /finish_trajectory（結束舊軌跡）
-    LM->>C: srv /start_trajectory（以目標 pose 為起點）
-    loop 驗證（timeout 5 s）
-        RP-->>LM: /robot_pose
-        Note over LM: 誤差 < 0.15 m / 0.15 rad ?
-    end
-    LM->>N: srv clear global / local costmap
-    LM->>FSM: /init_pose_status = true
+    classDef stage fill:#dbeafe,stroke:#2563eb,color:#0f172a
+    classDef step fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    class S2,S3,PLACE stage
+    class INIT,WAIT,MOVE,DONE step
 ```
 
-驗證失敗或逾時會回到 IDLE，可重新送 `/init_pose_cmd`。
+| 階段 | 說明 |
+| --- | --- |
+| **頂層控制** | 處理關卡切換、導航成功／失敗與停止條件，讓關卡子 FSM 專注於動作順序。目前啟動流程沿用既有 Cartographer 定位，`LOCALIZE` 狀態直接放行；程式保留定位初始化請求與結果介面。 |
+| **第二關** | 機構準備、入口移動、推蛤蜊、抬臂／收臂與返回；實機面板使用 `skip_stage2_arm` 分支略過部分手臂流程。 |
+| **第三關** | 初始化、跨越、進排、掃描對準、等待夾取、退回與換排，最後返回放置。移動與夾取回授互相約束，STM 狀態過期或仍在 PICKING 時停車等待。 |
+| **放置與時間管理** | 收集期間剩餘時間小於 40 秒時停止找下一捲，等當次夾取完成，經 `stage3_place_approach` 再到 `stage3_place`。倒數歸零不會直接中斷機構動作。 |
+
+第三關程式位於 `src/robot_fsm/src/stages/stage3_hay_fsm.cpp`，相關說明見 [STAGE3_README.md](STAGE3_README.md)；主流程與條件以目前程式為準。
+
+### 場地與控制設定
+
+| 設定 | 位置／用途 |
+| --- | --- |
+| 場地入口 | `/workspaces/field_config.yaml`：選擇地圖、TF、點位與 FSM 設定檔 |
+| 命名點位 | `src/robot_navigation/config/named_poses_{normal,mirror,dit}.yaml` |
+| 控速與指令映射 | `src/robot_fsm/config/fsm_side_{normal,mirror}.yaml`；DIT 共用 mirror 控制設定 |
+| 直接控速 | `direct_transition.<目標>`：速度、容差、穩定週期及逾時策略，支援段落的加減速設定 |
+| 掃排／換排 | `stage3_row_return_speed`、`stage3_row_return_slow_speed`、`stage3_row_shift_max_speed` 等；部分常數仍在 C++ header |
+
+### 場地模式
+
+| 模式 | 說明 |
+| --- | --- |
+| NORMAL | 使用 normal 地圖與點位 |
+| MIRROR | 使用 mirror 地圖與點位；第三關走 row4 → row3 → row2 → row1 |
+| MIRROR V2 | 使用 mirror 地圖；第三關改走 row3 → row1 → row2 |
+| DIT | 實驗室第三關測試場地 |
+
+### RESET 與比賽倒數
+
+- launcher 保存截止時間與路線選擇。
+- **STOP／RESET**：持續扣除原倒數；RESET 不重建定位。
+  - **RESET S2**：從第二關準備開始。
+  - **RESET S3**：經轉角及第三關入口重新進關。
+- **重新 START** 才設定新期限；重啟 launcher 則會遺失原有記憶體狀態。
+- **比賽時間**：normal／mirror 設為 240 秒，DIT 保留 120 秒測試設定，定義於 `fsm_launcher.py`，移植時可依需求修改。
+
+### TF tree 與座標約定
+
+```mermaid
+flowchart TB
+    world["world<br/>場地座標"]
+    map["map<br/>定位地圖"]
+    odom["odom<br/>里程計"]
+    base["base_footprint<br/>底盤中心"]
+    front["laser_front"]
+    rear["laser_rear"]
+
+    world -->|static TF| map
+    map -->|Cartographer| odom
+    odom -->|odom_tf_broadcaster| base
+    base -->|URDF| front
+    base -->|URDF| rear
+
+    classDef f fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    classDef key fill:#dbeafe,stroke:#2563eb,color:#0f172a
+    class map,odom,base,front,rear f
+    class world key
+```
+
+| Transform | 發布者 | 說明 |
+| --- | --- | --- |
+| `world → map` | `static_transform_publisher` | 依場地設定；目前 `x = 0.425 m`、`y = 1.0 m`、`yaw = 0` |
+| `map → odom` | Cartographer（pure localization） | 定位修正 |
+| `odom → base_footprint` | `odom_tf_broadcaster` | 依 `/odom` pose 轉發，為實機使用的方式 |
+| `base_footprint → laser_*` | `robot_state_publisher`／URDF | 前後 LiDAR 安裝位置 |
+
+- 命名點位與 FSM 定位目標使用 **world frame**，以場地左下角為原點。
+- 定位與 TF 由 `tdk_slam_ws` 維護，FSM 利用轉換後的 `/robot_pose` 做控制。
 
 ---
 
-## 套件與節點
+## 7. 介面一覽
 
-| 套件 | 內容 |
-|------|------|
-| `tdk_slam_manager` | 自寫節點、cartographer / slam_toolbox / AMCL / EKF 設定、URDF、地圖、`spawn_launch.py` |
-| `tdk_nav2_manager` | Nav2 參數（多組可切換）、costmap、behavior tree、`nav_launch.py`（含獨立的 map_server） |
-| `nav2_smac_planner` | Smac Planner 原始碼（參考 Eurobot 隊伍版本，vendored） |
-| `rplidar_ros` | RPLiDAR S3 驅動（vendored） |
-| `ira_laser_tools` | 雙 LiDAR 融合（nakai-omer humble fork，vendored） |
+### 主要 topics
 
-### 自寫節點（`tdk_slam_manager`）
+方向以 FSM 系統為基準；速度橋接與監控節點另於用途中標示。
 
-| 節點 | 輸入 | 輸出 | 功能 |
-|------|------|------|------|
-| `laser_angle_filter` | `/front/scan`、`/rear/scan` | `/*/scan_filtered` | 遮掉指定角度區間（車體結構），並濾除 `self_clearance`（0.20 m）以內打到車身的點 |
-| `odom_tf_broadcaster` | `/odom` | TF `odom → base_footprint` | 直接轉發 STM32 里程計，改用上位機時間戳，避免與 LiDAR 時間不同步 |
-| `robot_pose_publisher` | TF `world → base_footprint` | `/robot_pose` | 輸出場地座標的機器人位置，給 FSM / DirectTransition 使用 |
-| `localization_manager` | `/init_pose_cmd`、`/robot_pose` | `/init_pose_status` | 初始定位狀態機（見[初始定位流程](#初始定位流程)） |
+| Topic | 型別 | 方向與用途 |
+| --- | --- | --- |
+| `/robot_pose` | `geometry_msgs/msg/PoseStamped` | 輸入：world 位姿，供直接控速與關卡判斷 |
+| `/init_pose_cmd` | `geometry_msgs/msg/PoseStamped` | 輸出：保留的定位初始化請求介面 |
+| `/init_pose_status` | `std_msgs/msg/Bool` | 輸入：保留的定位初始化結果介面 |
+| `/straw/target` | `straw_interfaces/msg/StrawTarget` | 輸入：TDK-straw 視覺目標與誤差 |
+| `/mechanism/command` | `robot_interfaces/msg/MechanismCommand` | 輸出：機構動作指令 |
+| `/mechanism/straw_pick_status` | `robot_interfaces/msg/StrawPickStatus` | 輸入：夾取與機構狀態 |
+| `/cmd_vel` | `geometry_msgs/msg/Twist` | 底盤速度輸出，來自當前使用的導航／直接控制流程 |
+| `/cmd_vel_nav` | `geometry_msgs/msg/Twist` | Nav2 速度鏈與 navigation_server 精對位使用 |
+| `/mecanum/cmd_vel` | `geometry_msgs/msg/Twist` | 標準速度橋接送往底盤，20 Hz；輸入過期自動送零 |
+| `/odom` | `nav_msgs/msg/Odometry` | STM32 里程計，供定位導航系統使用 |
+| `/fsm/match_remaining` | `std_msgs/msg/Float64` | launcher 發布剩餘秒數，供面板顯示 |
+| `/host/battery` | `sensor_msgs/msg/BatteryState` | battery_monitor 發布主機電量 |
+| `/named_poses_markers` | `visualization_msgs/msg/MarkerArray` | 點位工具發布的視覺化標記 |
 
-### 主要設定檔
+程式另外保留 `/vision/scene_state`、`/mechanism/feedback` 與 `/final_pose` 訂閱介面；目前主要視覺與夾取整合使用上表的 `/straw/target` 和 `/mechanism/straw_pick_status`。
 
-| 檔案 | 內容 |
-|------|------|
-| `config/robot_params.yaml` | 底盤尺寸、LiDAR 外參 |
-| `config/laser_merger_params.yaml` | 雙 LiDAR 融合參數 |
-| `cartographer_config/cartographer_2d.lua` | Cartographer 建圖 |
-| `cartographer_config/localization.lua` | Cartographer pure localization |
-| `config/ekf_config.yaml` | EKF（目前停用，保留待修） |
+### 主要 actions 與 services
 
----
+| 介面 | 型別 | 用途 |
+| --- | --- | --- |
+| `/navigate_to_named_pose` | `robot_interfaces/action/NavigateToNamedPose` | 接收 `target_name` 與 `timeout_sec`，回報成功與訊息 |
+| `/navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | navigation_server 呼叫 Nav2 導航 |
+| `/spin` | `nav2_msgs/action/Spin` | 指定旋轉／測試流程使用的 Nav2 behavior |
+| `/reload_named_poses` | `std_srvs/srv/Trigger` | 重載 navigation_server 的命名點位 |
+| `/fsm/start_normal`、`/fsm/start_mirror` | `std_srvs/srv/Trigger` | 啟動對應場地 FSM |
+| `/fsm/start_mirror_v2`、`/fsm/start_dit` | `std_srvs/srv/Trigger` | 啟動 V2 路線或 DIT 測試 |
+| `/fsm/stop` | `std_srvs/srv/Trigger` | 停止 FSM、取消導航並發送零速度 |
+| `/fsm/reset_stage2`、`/fsm/reset_stage3` | `std_srvs/srv/Trigger` | 保留定位、倒數與路線選擇，重啟指定關卡 |
 
-## Nav2 設定
+### 修改設定後的生效方式
 
-目前比賽使用 **Smac2D planner + MPPI controller（Omni motion model）**，適合麥克納姆輪全向移動。主要參數在 `config/tdk_nav2_params.yaml`：
-
-| 項目 | 值 |
-|------|----|
-| `vx_max` / `vy_max` | 0.8 m/s |
-| `wz_max` | 0.6 rad/s |
-| `xy_goal_tolerance` | 0.04 m |
-| `yaw_goal_tolerance` | 0.03 rad |
-
-`config/` 另外保留了開發期間比較過的組合，可用 `nav_params_file:=` 切換：
-
-| 檔案 | 組合 |
-|------|------|
-| `tdk_nav2_params.yaml` | **Smac2D + MPPI（比賽使用）** |
-| `smac_2d_params.yaml` | Smac2D |
-| `smac_lattice_params.yaml` | Smac Lattice |
-| `theta_star_params.yaml` | Theta* |
-| `mppi_params.yaml` | MPPI |
-| `dwb_params.yaml` | DWB |
-
----
-
-## 進度與已知問題
-
-### ✅ 已完成
-
-- 雙 LiDAR 驅動、角度與車身濾波、360° 融合 pipeline
-- STM32 micro-ROS `/odom` → `odom_tf_broadcaster` 發布 `odom → base_footprint`
-- Cartographer 建圖與 pure localization，已建立比賽 Normal / Mirror 地圖與 DIT 實驗室地圖
-- `field_config.yaml` 統一管理場地：一個 `field_side` 同時決定地圖、world→map、named_poses、FSM 設定
-- `localization_manager`：初始定位、驗證、清 costmap、回報 FSM
-- `robot_pose_publisher` 輸出場地座標 `/robot_pose`
-- Nav2：Smac2D + MPPI（Omni），速度統一經 `velocity_smoother`，mirror / dit 支援 spin 速度倍率
-- 與 robot_panel_ui 整合，比賽可一鍵啟動
-
-### ❌ 未完成
-
-- **EKF（robot_localization）停用中**：實機測試時 `/odometry/filtered` 異常，暫以自寫 `odom_tf_broadcaster` 取代；IMU 融合也還沒接上，`ekf_config.yaml` 保留待修
-- **slam_toolbox 定位模式未實機測試**：launch 與 `localization_manager` 的 `/initialpose` 介面已寫好
-- **AMCL 定位模式未實機測試**
+| 修改內容 | 生效方式 |
+| --- | --- |
+| named poses YAML | 呼叫 `/reload_named_poses` |
+| FSM 控制參數 YAML | 通常需重啟 FSM |
+| `mirror_spin_speed_scale` | 由 Nav2 啟動時讀取，需重啟導航 |
+| C++ 程式 | 需重新建置 |
